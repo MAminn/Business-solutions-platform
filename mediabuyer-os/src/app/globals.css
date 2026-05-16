@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Dark mode is the default — matches the screenshot aesthetic */
+    --background: 0 0% 4%;            /* page bg */
+    --foreground: 0 0% 98%;
+
+    --card: 0 0% 7%;                  /* card bg */
+    --card-foreground: 0 0% 98%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 224 84% 64%;           /* the bright blue accent */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 224 84% 64%;
+
+    --radius: 0.75rem;
+  }
+
+  /* No light theme yet — keep parity with the screenshots */
+  .light {
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+  }
+
+  /* subtle dotted grid for empty states */
+  .bg-dot-grid {
+    background-image: radial-gradient(circle, hsl(0 0% 20%) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+}
+
+/* Recharts dark-mode tweaks */
+.recharts-cartesian-grid line {
+  stroke: hsl(var(--border));
+  stroke-opacity: 0.5;
+}
+.recharts-text {
+  fill: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(0 0% 22%); }

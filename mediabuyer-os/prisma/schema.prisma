@@ -1,0 +1,620 @@
+// Mediabuyer OS — Prisma schema
+// Postgres. Run: pnpm db:push (dev) or pnpm db:migrate (production)
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// IDENTITY
+// ============================================================================
+
+enum UserRole {
+  OWNER
+  TEAM
+  CLIENT
+  VIEWER
+}
+
+model User {
+  id            String   @id @default(cuid())
+  clerkId       String?  @unique
+  email         String   @unique
+  name          String?
+  avatarUrl     String?
+  role          UserRole @default(TEAM)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships   OrganizationMember[]
+  assignedClients ClientAssignee[]
+  clientUserOf  Client[]   @relation("ClientPortalUser")
+  createdTasks  Task[]     @relation("TaskCreatedBy")
+  assignedTasks Task[]     @relation("TaskAssignee")
+  reviewedRecs  Recommendation[] @relation("RecReviewedBy")
+  generatedReports Report[] @relation("ReportGeneratedBy")
+  reportComments ReportComment[]
+  auditLogs     AuditLog[]
+
+  @@index([clerkId])
+  @@index([email])
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("internal")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  OrganizationMember[]
+  clients  Client[]
+  auditLogs AuditLog[]
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           UserRole     @default(TEAM)
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+// ============================================================================
+// CLIENT DOMAIN
+// ============================================================================
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  CHURNED
+  PROSPECT
+}
+
+enum ClientHealth {
+  EXCELLENT
+  GOOD
+  NEEDS_ATTENTION
+  AT_RISK
+}
+
+model Client {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  name                String
+  industry            String?
+  logoUrl             String?
+  status              ClientStatus @default(ACTIVE)
+  health              ClientHealth @default(GOOD)
+  monthlyBudget       Decimal?     @db.Decimal(12, 2)
+  targetCpa           Decimal?     @db.Decimal(10, 2)
+  targetRoas          Decimal?     @db.Decimal(6, 2)
+  reportingCurrency   String       @default("USD")
+  // Portal-facing user (single-user client login). For multi-user clients,
+  // add a separate ClientPortalMember model later.
+  portalUserId        String?
+  notes               String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  portalUser          User?               @relation("ClientPortalUser", fields: [portalUserId], references: [id])
+  assignees           ClientAssignee[]
+  adAccountConnections AdAccountConnection[]
+  alerts              Alert[]
+  tasks               Task[]
+  recommendations     Recommendation[]
+  reports             Report[]
+
+  @@index([organizationId, status])
+  @@index([health])
+}
+
+model ClientAssignee {
+  id       String @id @default(cuid())
+  clientId String
+  userId   String
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, userId])
+  @@index([userId])
+}
+
+// ============================================================================
+// AD ACCOUNT CONNECTIONS
+// ============================================================================
+
+enum AdPlatform {
+  META
+  GOOGLE   // not used in v1 but kept for forward compatibility
+  TIKTOK
+  LINKEDIN
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+}
+
+model AdAccountConnection {
+  id                  String           @id @default(cuid())
+  clientId            String
+  platform            AdPlatform       @default(META)
+  platformAccountId   String           // e.g. Meta "act_123456789"
+  accountName         String
+  currency            String           @default("USD")
+  timezone            String           @default("UTC")
+  // Encrypted with AES-256-GCM (see lib/encryption.ts). Format: iv:ciphertext:authTag (hex).
+  accessTokenEnc      String?
+  refreshTokenEnc     String?
+  tokenExpiresAt      DateTime?
+  status              ConnectionStatus @default(ACTIVE)
+  lastSyncedAt        DateTime?
+  lastSyncError       String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  client     Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaigns  Campaign[]
+  creatives  Creative[]
+  syncJobs   SyncJob[]
+
+  @@unique([platform, platformAccountId])
+  @@index([clientId])
+  @@index([status])
+}
+
+// ============================================================================
+// AD ENTITIES (mirrored from Meta)
+// ============================================================================
+
+model Campaign {
+  id                     String   @id @default(cuid())
+  adAccountConnectionId  String
+  platformId             String
+  name                   String
+  objective              String?
+  status                 String?
+  effectiveStatus        String?
+  dailyBudget            Decimal? @db.Decimal(12, 2)
+  lifetimeBudget         Decimal? @db.Decimal(12, 2)
+  buyingType             String?
+  startTime              DateTime?
+  stopTime               DateTime?
+  specialAdCategories    Json?
+  raw                    Json?
+  updatedAt              DateTime @updatedAt
+
+  adAccountConnection AdAccountConnection @relation(fields: [adAccountConnectionId], references: [id], onDelete: Cascade)
+  adSets              AdSet[]
+
+  @@unique([adAccountConnectionId, platformId])
+  @@index([adAccountConnectionId])
+  @@index([effectiveStatus])
+}
+
+model AdSet {
+  id                 String   @id @default(cuid())
+  campaignId         String
+  platformId         String
+  name               String
+  status             String?
+  effectiveStatus    String?
+  dailyBudget        Decimal? @db.Decimal(12, 2)
+  lifetimeBudget     Decimal? @db.Decimal(12, 2)
+  optimizationGoal   String?
+  billingEvent       String?
+  bidStrategy        String?
+  targeting          Json?
+  startTime          DateTime?
+  endTime            DateTime?
+  raw                Json?
+  updatedAt          DateTime @updatedAt
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@unique([campaignId, platformId])
+  @@index([campaignId])
+}
+
+enum CreativeType {
+  IMAGE
+  VIDEO
+  CAROUSEL
+  DPA
+  COLLECTION
+  OTHER
+}
+
+model Creative {
+  id                    String       @id @default(cuid())
+  adAccountConnectionId String
+  platformId            String
+  name                  String
+  type                  CreativeType @default(IMAGE)
+  thumbnailUrl          String?
+  imageUrl              String?
+  videoUrl              String?
+  bodyText              String?
+  headline              String?
+  linkUrl               String?
+  callToAction          String?
+  isWinner              Boolean      @default(false) // tagged manually or via rule
+  raw                   Json?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  adAccountConnection AdAccountConnection @relation(fields: [adAccountConnectionId], references: [id], onDelete: Cascade)
+  ads                 Ad[]
+
+  @@unique([adAccountConnectionId, platformId])
+  @@index([adAccountConnectionId])
+}
+
+model Ad {
+  id              String   @id @default(cuid())
+  adSetId         String
+  platformId      String
+  name            String
+  status          String?
+  effectiveStatus String?
+  creativeId      String?
+  raw             Json?
+  updatedAt       DateTime @updatedAt
+
+  adSet    AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  creative Creative? @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+
+  @@unique([adSetId, platformId])
+  @@index([adSetId])
+}
+
+// ============================================================================
+// INSIGHTS (daily time-series)
+// ============================================================================
+
+enum InsightEntity {
+  ACCOUNT
+  CAMPAIGN
+  AD_SET
+  AD
+}
+
+model InsightsDaily {
+  id               String        @id @default(cuid())
+  entityType       InsightEntity
+  entityId         String        // internal ID (Campaign.id / AdSet.id / Ad.id / AdAccountConnection.id)
+  date             DateTime      @db.Date
+  // Core delivery
+  impressions      Int           @default(0)
+  reach            Int           @default(0)
+  clicks           Int           @default(0)
+  spend            Decimal       @default(0) @db.Decimal(12, 2)
+  frequency        Decimal?      @db.Decimal(6, 2)
+  // Rates
+  ctr              Decimal?      @db.Decimal(6, 4)
+  cpc              Decimal?      @db.Decimal(10, 4)
+  cpm              Decimal?      @db.Decimal(10, 2)
+  // Conversions
+  conversions      Int           @default(0)
+  purchases        Int           @default(0)
+  leads            Int           @default(0)
+  conversionValue  Decimal       @default(0) @db.Decimal(12, 2)
+  roas             Decimal?      @db.Decimal(8, 4)
+  cpa              Decimal?      @db.Decimal(10, 2)
+  // Video
+  videoViews3s     Int?
+  videoViewsP25    Int?
+  videoViewsP50    Int?
+  videoViewsP75    Int?
+  videoViewsP100   Int?
+  videoAvgTime     Decimal?      @db.Decimal(6, 2)
+  hookRate         Decimal?      @db.Decimal(6, 4) // video_play_3s / impressions
+  thumbstopRate    Decimal?      @db.Decimal(6, 4)
+  // Raw payload for forward-compat
+  raw              Json?
+  createdAt        DateTime      @default(now())
+
+  @@unique([entityType, entityId, date])
+  @@index([entityType, entityId])
+  @@index([date])
+}
+
+// ============================================================================
+// WORKFLOW: alerts, tasks, recommendations, reports
+// ============================================================================
+
+enum AlertType {
+  CPA_SPIKE
+  ROAS_DROP
+  SPEND_PACING_OVER
+  SPEND_PACING_UNDER
+  AD_FATIGUE
+  UNDER_DELIVERY
+  ACCOUNT_STATUS
+  CREATIVE_FATIGUE
+  BUDGET_DEPLETED
+  OTHER
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+model Alert {
+  id             String         @id @default(cuid())
+  clientId       String
+  type           AlertType
+  severity       AlertSeverity  @default(WARNING)
+  entityType     InsightEntity?
+  entityId       String?
+  title          String
+  message        String
+  rule           String?        // human-readable rule label, e.g. "ROAS < 1.5 for 3 days"
+  status         AlertStatus    @default(OPEN)
+  triggeredAt    DateTime       @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  metadata       Json?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, status])
+  @@index([severity])
+  @@index([triggeredAt])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  DISMISSED
+}
+
+enum TaskPriority {
+  LOW
+  MED
+  HIGH
+  URGENT
+}
+
+enum TaskSource {
+  MANUAL
+  ALERT
+  AI_RECOMMENDATION
+  RULE
+}
+
+model Task {
+  id          String        @id @default(cuid())
+  clientId    String
+  entityType  InsightEntity?
+  entityId    String?
+  title       String
+  description String?
+  rule        String?       // e.g. "ROAS < 1.5 for 3 days"
+  status      TaskStatus    @default(TODO)
+  priority    TaskPriority  @default(MED)
+  source      TaskSource    @default(MANUAL)
+  sourceRefId String?
+  assigneeId  String?
+  createdById String?
+  dueDate     DateTime?
+  createdAt   DateTime      @default(now())
+  completedAt DateTime?
+
+  client     Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assignee   User?  @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy  User?  @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  @@index([clientId, status])
+  @@index([assigneeId, status])
+  @@index([priority])
+}
+
+enum RecommendationAction {
+  PAUSE
+  SCALE
+  TEST
+  INVESTIGATE
+  COPY_WINNER
+  REFRESH_CREATIVE
+  ADJUST_BUDGET
+  ADJUST_TARGETING
+}
+
+enum RecommendationStatus {
+  PENDING
+  APPROVED
+  DISMISSED
+  ACTED_ON
+}
+
+model Recommendation {
+  id               String                @id @default(cuid())
+  clientId         String
+  entityType       InsightEntity
+  entityId         String
+  entityName       String?
+  action           RecommendationAction
+  priority         TaskPriority          @default(MED)
+  confidence       Decimal               @db.Decimal(4, 3)
+  reasoning        String
+  supportingData   Json?
+  status           RecommendationStatus  @default(PENDING)
+  reviewedById     String?
+  reviewedAt       DateTime?
+  taskId           String? // when promoted to a task
+  createdAt        DateTime              @default(now())
+
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  reviewedBy  User?  @relation("RecReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([clientId, status])
+  @@index([createdAt])
+}
+
+enum ReportType {
+  WEEKLY
+  MONTHLY
+  ADHOC
+}
+
+enum ReportStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ARCHIVED
+}
+
+model Report {
+  id              String       @id @default(cuid())
+  clientId        String
+  type            ReportType   @default(WEEKLY)
+  periodStart     DateTime
+  periodEnd       DateTime
+  status          ReportStatus @default(DRAFT)
+  summary         String?
+  metricsSnapshot Json?
+  pdfUrl          String?
+  shareToken      String?      @unique
+  generatedById   String?
+  generatedAt     DateTime     @default(now())
+  sentAt          DateTime?
+  viewedAt        DateTime?
+
+  client      Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  generatedBy User?           @relation("ReportGeneratedBy", fields: [generatedById], references: [id])
+  comments    ReportComment[]
+
+  @@index([clientId])
+  @@index([generatedAt])
+}
+
+model ReportComment {
+  id        String   @id @default(cuid())
+  reportId  String
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+}
+
+// ============================================================================
+// OBSERVABILITY: sync jobs, AI runs, audit log
+// ============================================================================
+
+enum SyncJobType {
+  STRUCTURAL
+  INSIGHTS_INCREMENTAL
+  INSIGHTS_BACKFILL
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model SyncJob {
+  id                    String        @id @default(cuid())
+  adAccountConnectionId String
+  type                  SyncJobType
+  status                SyncJobStatus @default(PENDING)
+  recordsSynced         Int           @default(0)
+  errorMessage          String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime      @default(now())
+
+  adAccountConnection AdAccountConnection @relation(fields: [adAccountConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([adAccountConnectionId, status])
+  @@index([createdAt])
+}
+
+enum AiRunType {
+  DAILY_INSIGHTS
+  WEEKLY_REPORT
+  RECOMMENDATION_BATCH
+  ONE_OFF
+}
+
+enum AiRunStatus {
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+model AiRun {
+  id            String      @id @default(cuid())
+  type          AiRunType
+  clientId      String?
+  inputHash     String
+  promptVersion String
+  model         String
+  inputTokens   Int
+  outputTokens  Int
+  costUsd       Decimal     @db.Decimal(10, 6)
+  latencyMs     Int
+  status        AiRunStatus
+  output        Json?
+  errorMessage  String?
+  createdAt     DateTime    @default(now())
+
+  @@index([type, createdAt])
+  @@index([clientId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  userId         String?
+  action         String   // e.g. "client.create", "task.update", "connection.delete"
+  entityType     String?
+  entityId       String?
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+  @@index([entityType, entityId])
+}
