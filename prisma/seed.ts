@@ -14,8 +14,10 @@ import {
   TaskPriority,
   TaskSource,
   InsightEntity,
+  StrategyStatus,
+  CampaignObjectiveType,
 } from "@prisma/client";
-import { subDays, format } from "date-fns";
+import { subDays, startOfMonth, endOfMonth } from "date-fns";
 
 const prisma = new PrismaClient();
 
@@ -36,6 +38,8 @@ async function main() {
   await prisma.adSet.deleteMany();
   await prisma.creative.deleteMany();
   await prisma.campaign.deleteMany();
+  await prisma.strategyObjective.deleteMany();
+  await prisma.strategy.deleteMany();
   await prisma.adAccountConnection.deleteMany();
   await prisma.clientAssignee.deleteMany();
   await prisma.client.deleteMany();
@@ -273,6 +277,17 @@ async function main() {
     },
   ];
 
+  const objectiveByName: Record<string, string> = {
+    "Spring Glow — Prospecting": "OUTCOME_SALES",
+    "Streetwear Launch V2": "OUTCOME_SALES",
+    "Pre-Workout Hero": "OUTCOME_SALES",
+    "Sofa Collection — Retarget": "OUTCOME_SALES",
+    "Demo Request — Enterprise": "OUTCOME_LEADS",
+    "Iceland Adventure Push": "OUTCOME_TRAFFIC",
+    "Branded Search": "OUTCOME_SALES",
+    "Holiday Bundles": "OUTCOME_ENGAGEMENT",
+  };
+
   for (const cs of campaignsSeed) {
     const ctx = createdClients.find((x) => x.client.name === cs.clientName);
     if (!ctx) continue;
@@ -282,7 +297,7 @@ async function main() {
         adAccountConnectionId: ctx.connection.id,
         platformId: `cmp_${Math.floor(Math.random() * 1e11)}`,
         name: cs.name,
-        objective: "OUTCOME_SALES",
+        objective: objectiveByName[cs.name] ?? "OUTCOME_SALES",
         status: cs.status,
         effectiveStatus: cs.status,
         dailyBudget: 500,
@@ -568,6 +583,41 @@ async function main() {
         message: a.message,
         rule: a.rule,
         status: AlertStatus.OPEN,
+      },
+    });
+  }
+
+  // --- Strategy (demo: Lumen Skincare current month) ---------------------
+  const lumenCtx = createdClients.find(
+    (x) => x.client.name === "Lumen Skincare",
+  );
+  if (lumenCtx) {
+    const now = new Date();
+    await prisma.strategy.create({
+      data: {
+        clientId: lumenCtx.client.id,
+        name: "Current month",
+        status: StrategyStatus.ACTIVE,
+        periodStart: startOfMonth(now),
+        periodEnd: endOfMonth(now),
+        monthlyBudget: 85000,
+        revenueGoal: 340000,
+        objectives: {
+          create: [
+            {
+              type: CampaignObjectiveType.SALES,
+              allocatedBudget: 70000,
+            },
+            {
+              type: CampaignObjectiveType.TRAFFIC,
+              allocatedBudget: 10000,
+            },
+            {
+              type: CampaignObjectiveType.ENGAGEMENT,
+              allocatedBudget: 5000,
+            },
+          ],
+        },
       },
     });
   }

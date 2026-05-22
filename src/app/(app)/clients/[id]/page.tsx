@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { subDays, formatDistanceToNow } from "date-fns";
 import type { TaskPriority } from "@prisma/client";
@@ -7,7 +6,7 @@ import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
-import { cn } from "@/lib/utils";
+import { ClientSubNav } from "@/components/clients/sub-nav";
 import {
   formatCurrency,
   formatCurrencyExact,
@@ -35,13 +34,6 @@ const PRIORITY_VARIANT = {
   MED: "warning",
   LOW: "muted",
 } as const;
-
-const SUB_TABS = [
-  { label: "Overview", segment: "" },
-  { label: "Campaigns", segment: "campaigns" },
-  { label: "Creatives", segment: "creatives" },
-  { label: "Tasks", segment: "tasks" },
-] as const;
 
 function num(value: unknown): number {
   if (value === null || value === undefined) return 0;
@@ -163,27 +155,7 @@ export default async function ClientOverviewPage({ params }: PageProps) {
           )}
         </div>
 
-        <nav className='flex items-center gap-1 border-b border-border/60'>
-          {SUB_TABS.map((tab) => {
-            const href = tab.segment
-              ? `/clients/${client.id}/${tab.segment}`
-              : `/clients/${client.id}`;
-            const active = tab.segment === "";
-            return (
-              <Link
-                key={tab.label}
-                href={href}
-                className={cn(
-                  "-mb-px inline-flex items-center border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-                  active
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                )}>
-                {tab.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <ClientSubNav clientId={client.id} active='' />
       </div>
 
       {/* KPI strip */}

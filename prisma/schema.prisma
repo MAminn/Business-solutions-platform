@@ -120,6 +120,7 @@ model Client {
   tasks               Task[]
   recommendations     Recommendation[]
   reports             Report[]
+  strategies          Strategy[]
 
   @@index([organizationId, status])
   @@index([health])
@@ -135,6 +136,59 @@ model ClientAssignee {
 
   @@unique([clientId, userId])
   @@index([userId])
+}
+
+enum StrategyStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CampaignObjectiveType {
+  SALES
+  LEADS
+  TRAFFIC
+  ENGAGEMENT
+  AWARENESS
+  APP_PROMOTION
+  OTHER
+}
+
+model Strategy {
+  id              String         @id @default(cuid())
+  clientId        String
+  name            String?
+  status          StrategyStatus @default(ACTIVE)
+  periodStart     DateTime
+  periodEnd       DateTime
+  monthlyBudget   Decimal?       @db.Decimal(12, 2)
+  revenueGoal     Decimal?       @db.Decimal(12, 2)
+  conversionGoal  Int?
+  minCpa          Decimal?       @db.Decimal(10, 2)
+  maxCpa          Decimal?       @db.Decimal(10, 2)
+  minRoas         Decimal?       @db.Decimal(6, 2)
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  client          Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  objectives      StrategyObjective[]
+
+  @@index([clientId, status])
+}
+
+model StrategyObjective {
+  id              String                @id @default(cuid())
+  strategyId      String
+  type            CampaignObjectiveType
+  allocatedBudget Decimal               @db.Decimal(12, 2)
+  notes           String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  strategy        Strategy              @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+
+  @@unique([strategyId, type])
 }
 
 // ============================================================================

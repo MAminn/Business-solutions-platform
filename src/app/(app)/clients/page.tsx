@@ -4,7 +4,6 @@ import { subDays, startOfMonth } from "date-fns";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientCard } from "@/components/clients/client-card";
 
@@ -126,50 +125,26 @@ export default async function ClientsPage() {
         </Button>
       </div>
 
-      <Tabs defaultValue='all'>
-        <TabsList>
-          <TabsTrigger value='all'>All clients</TabsTrigger>
-          <TabsTrigger value='strategies'>Strategies</TabsTrigger>
-          <TabsTrigger value='ad-accounts'>Ad accounts</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value='all'>
-          {cards.length === 0 ? (
-            <EmptyState
-              title='No clients yet'
-              description='Add your first client to start tracking performance.'
-              action={
-                <Button asChild size='sm'>
-                  <Link href='/clients/new'>
-                    <Plus className='h-4 w-4' />
-                    Add client
-                  </Link>
-                </Button>
-              }
-            />
-          ) : (
-            <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'>
-              {cards.map((c) => (
-                <ClientCard key={c.id} client={c} />
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value='strategies'>
-          <EmptyState
-            title='Coming soon'
-            description='Per-client strategy briefs land in a future release.'
-          />
-        </TabsContent>
-
-        <TabsContent value='ad-accounts'>
-          <EmptyState
-            title='Coming soon'
-            description='A consolidated view of every ad account is on the way.'
-          />
-        </TabsContent>
-      </Tabs>
+      {cards.length === 0 ? (
+        <EmptyState
+          title='No clients yet'
+          description='Add your first client to start tracking performance.'
+          action={
+            <Button asChild size='sm'>
+              <Link href='/clients/new'>
+                <Plus className='h-4 w-4' />
+                Add client
+              </Link>
+            </Button>
+          }
+        />
+      ) : (
+        <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'>
+          {cards.map((c) => (
+            <ClientCard key={c.id} client={c} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
