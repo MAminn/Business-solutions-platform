@@ -288,3 +288,14 @@ This matters. Copilot should **consume** these primitives, not rebuild them:
 ---
 
 End of handoff. Next step → see `COPILOT_PROMPT.md`.
+
+
+## Strategy / Objective layer � known deviations from original spec
+
+- StrategyObjective uses a CampaignObjectiveType enum (SALES, LEADS, TRAFFIC, ENGAGEMENT, AWARENESS, APP_PROMOTION, OTHER), NOT the raw Meta canonical objective strings (e.g. `OUTCOME_SALES`). Campaigns still store the raw Meta string in `Campaign.objective`; the join happens via `src/lib/meta/objectives.ts` → `normalizeMetaObjective()`. Maintenance implication: every time Meta releases a new objective value, the normalizer must be updated or it falls into OTHER.
+- `Strategy.status` is an enum (DRAFT, ACTIVE, ARCHIVED). The `active` strategy is selected via `status === ACTIVE` + most recent `createdAt`.
+- Strategy has `minCpa` / `maxCpa` / `minRoas` columns at the strategy level. These OVERRIDE the Client-level KPI bounds when set. Precedence: strategy value if non-null, else fall back to client. Currently no UI surfaces the override explicitly � the strategy page reads from strategy first.
+- StrategyObjective has NO per-objective KPI overrides. If you need that later, add three new columns: `minCpa`, `maxCpa`, `minRoas`, all nullable Decimal.
+- Strategy and StrategyObjective have NO `createdById` relation. Audit log captures who created each via `writeAudit` metadata only.
+- Strategy and Ad Account pages inline their rendering (no separate `strategy-overview`, `objective-card`, `ad-account-card` components). Refactor if/when a second consumer needs the same shape.
+- StrategyObjective has NO `label` field. Human labels come from `OBJECTIVE_LABEL` in `src/lib/meta/objectives.ts`.

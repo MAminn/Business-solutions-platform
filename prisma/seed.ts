@@ -587,39 +587,43 @@ async function main() {
     });
   }
 
-  // --- Strategy (demo: Lumen Skincare current month) ---------------------
-  const lumenCtx = createdClients.find(
-    (x) => x.client.name === "Lumen Skincare",
-  );
-  if (lumenCtx) {
+  // --- Strategy (one per client, current month) -------------------------
+  {
     const now = new Date();
-    await prisma.strategy.create({
-      data: {
-        clientId: lumenCtx.client.id,
-        name: "Current month",
-        status: StrategyStatus.ACTIVE,
-        periodStart: startOfMonth(now),
-        periodEnd: endOfMonth(now),
-        monthlyBudget: 85000,
-        revenueGoal: 340000,
-        objectives: {
-          create: [
-            {
-              type: CampaignObjectiveType.SALES,
-              allocatedBudget: 70000,
-            },
-            {
-              type: CampaignObjectiveType.TRAFFIC,
-              allocatedBudget: 10000,
-            },
-            {
-              type: CampaignObjectiveType.ENGAGEMENT,
-              allocatedBudget: 5000,
-            },
-          ],
+    const periodStart = startOfMonth(now);
+    const periodEnd = endOfMonth(now);
+
+    for (const ctx of createdClients) {
+      const budget = ctx.seedMeta.monthlyBudget;
+      const revenueGoal = Math.round(budget * ctx.seedMeta.roas);
+      await prisma.strategy.create({
+        data: {
+          clientId: ctx.client.id,
+          name: "Current month",
+          status: StrategyStatus.ACTIVE,
+          periodStart,
+          periodEnd,
+          monthlyBudget: budget,
+          revenueGoal,
+          objectives: {
+            create: [
+              {
+                type: CampaignObjectiveType.SALES,
+                allocatedBudget: Math.round(budget * 0.7),
+              },
+              {
+                type: CampaignObjectiveType.ENGAGEMENT,
+                allocatedBudget: Math.round(budget * 0.2),
+              },
+              {
+                type: CampaignObjectiveType.TRAFFIC,
+                allocatedBudget: Math.round(budget * 0.1),
+              },
+            ],
+          },
         },
-      },
-    });
+      });
+    }
   }
 
   console.log("✅  Seed complete.");
