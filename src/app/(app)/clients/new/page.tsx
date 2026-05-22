@@ -15,8 +15,8 @@ export default function NewClientPage() {
           Add new client
         </h1>
         <p className='mt-1 text-sm text-muted-foreground'>
-          Spin up a new client workspace. You can connect ad accounts after the
-          client is created.
+          Create a client workspace and attach their Meta ad account details.
+          You can connect OAuth access from Integrations.
         </p>
       </div>
 
@@ -24,8 +24,8 @@ export default function NewClientPage() {
         <CardHeader>
           <CardTitle>Client details</CardTitle>
           <CardDescription>
-            Required fields are marked with an asterisk. Budgets and targets can
-            be edited later.
+            Required fields are marked with an asterisk. KPI targets and Meta ad
+            account fields are optional and can be added later.
           </CardDescription>
         </CardHeader>
         <CardContent>

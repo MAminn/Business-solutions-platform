@@ -28,9 +28,9 @@ export interface ClientCardProps {
     id: string;
     name: string;
     industry: string | null;
+    logoUrl: string | null;
     health: ClientHealth;
     monthlyBudget: number;
-    targetRoas: number;
     pacing: number;
     roas: number;
   };
@@ -47,7 +47,11 @@ export function ClientCard({ client }: ClientCardProps) {
         {/* Top row */}
         <div className='flex items-start justify-between gap-3'>
           <div className='flex min-w-0 items-center gap-3'>
-            <Avatar name={client.name} gradientSeed={client.id} />
+            <Avatar
+              name={client.name}
+              gradientSeed={client.id}
+              src={client.logoUrl ?? undefined}
+            />
             <div className='min-w-0'>
               <p className='truncate text-sm font-semibold text-foreground'>
                 {client.name}

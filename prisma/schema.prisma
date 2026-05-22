@@ -101,8 +101,9 @@ model Client {
   status              ClientStatus @default(ACTIVE)
   health              ClientHealth @default(GOOD)
   monthlyBudget       Decimal?     @db.Decimal(12, 2)
-  targetCpa           Decimal?     @db.Decimal(10, 2)
-  targetRoas          Decimal?     @db.Decimal(6, 2)
+  minCpa              Decimal?     @db.Decimal(10, 2)
+  maxCpa              Decimal?     @db.Decimal(10, 2)
+  minRoas             Decimal?     @db.Decimal(6, 2)
   reportingCurrency   String       @default("USD")
   // Portal-facing user (single-user client login). For multi-user clients,
   // add a separate ClientPortalMember model later.

@@ -75,14 +75,20 @@ async function main() {
   });
 
   // --- Clients (matches dashboard screenshot) --------------------------
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const cpaRange = (target: number) => ({
+    minCpa: round2(target * 0.85),
+    maxCpa: round2(target * 1.25),
+  });
+
   const clientsSeed = [
     {
       name: "Lumen Skincare",
       industry: "Beauty / DTC",
       health: ClientHealth.EXCELLENT,
       monthlyBudget: 85000,
-      targetCpa: 28,
-      targetRoas: 4.0,
+      ...cpaRange(28),
+      minRoas: 4.0,
       pacing: 73,
       roas: 4.2,
     },
@@ -91,8 +97,8 @@ async function main() {
       industry: "Fashion",
       health: ClientHealth.GOOD,
       monthlyBudget: 120000,
-      targetCpa: 35,
-      targetRoas: 3.0,
+      ...cpaRange(35),
+      minRoas: 3.0,
       pacing: 82,
       roas: 3.1,
     },
@@ -101,8 +107,8 @@ async function main() {
       industry: "Health / Supplements",
       health: ClientHealth.NEEDS_ATTENTION,
       monthlyBudget: 60000,
-      targetCpa: 40,
-      targetRoas: 2.5,
+      ...cpaRange(40),
+      minRoas: 2.5,
       pacing: 86,
       roas: 2.4,
     },
@@ -111,8 +117,8 @@ async function main() {
       industry: "Home",
       health: ClientHealth.AT_RISK,
       monthlyBudget: 45000,
-      targetCpa: 90,
-      targetRoas: 2.0,
+      ...cpaRange(90),
+      minRoas: 2.0,
       pacing: 91,
       roas: 1.6,
     },
@@ -121,8 +127,8 @@ async function main() {
       industry: "B2B SaaS",
       health: ClientHealth.EXCELLENT,
       monthlyBudget: 95000,
-      targetCpa: 150,
-      targetRoas: 5.0,
+      ...cpaRange(150),
+      minRoas: 5.0,
       pacing: 74,
       roas: 5.8,
     },
@@ -131,8 +137,8 @@ async function main() {
       industry: "Travel",
       health: ClientHealth.GOOD,
       monthlyBudget: 70000,
-      targetCpa: 65,
-      targetRoas: 3.0,
+      ...cpaRange(65),
+      minRoas: 3.0,
       pacing: 48,
       roas: 3.4,
     },
@@ -148,8 +154,9 @@ async function main() {
         status: ClientStatus.ACTIVE,
         health: c.health,
         monthlyBudget: c.monthlyBudget,
-        targetCpa: c.targetCpa,
-        targetRoas: c.targetRoas,
+        minCpa: c.minCpa,
+        maxCpa: c.maxCpa,
+        minRoas: c.minRoas,
         assignees: {
           create: [{ userId: owner.id }],
         },
@@ -184,14 +191,86 @@ async function main() {
     hookRate: number;
     status: string;
   }> = [
-    { clientName: "Lumen Skincare", name: "Spring Glow — Prospecting", spend: 18420, roas: 4.6, cpa: 22.4, ctr: 2.1, hookRate: 28.4, status: "ACTIVE" },
-    { clientName: "Northwind Apparel", name: "Streetwear Launch V2", spend: 31200, roas: 3.4, cpa: 38.2, ctr: 1.9, hookRate: 24.1, status: "ACTIVE" },
-    { clientName: "PeakFit Supplements", name: "Pre-Workout Hero", spend: 14800, roas: 2.1, cpa: 41.6, ctr: 1.4, hookRate: 17.2, status: "ACTIVE" },
-    { clientName: "Harbor & Co Furniture", name: "Sofa Collection — Retarget", spend: 9200, roas: 1.4, cpa: 88, ctr: 0.9, hookRate: 12.8, status: "PAUSED" },
-    { clientName: "Brightline SaaS", name: "Demo Request — Enterprise", spend: 22100, roas: 6.1, cpa: 142, ctr: 1.6, hookRate: 31, status: "ACTIVE" },
-    { clientName: "Rove Travel Co", name: "Iceland Adventure Push", spend: 11400, roas: 3.8, cpa: 64, ctr: 2.3, hookRate: 26.7, status: "ACTIVE" },
-    { clientName: "Lumen Skincare", name: "Branded Search", spend: 6800, roas: 8.2, cpa: 12, ctr: 4.1, hookRate: 0, status: "ACTIVE" },
-    { clientName: "Northwind Apparel", name: "Holiday Bundles", spend: 0, roas: 0, cpa: 0, ctr: 0, hookRate: 0, status: "DRAFT" },
+    {
+      clientName: "Lumen Skincare",
+      name: "Spring Glow — Prospecting",
+      spend: 18420,
+      roas: 4.6,
+      cpa: 22.4,
+      ctr: 2.1,
+      hookRate: 28.4,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "Northwind Apparel",
+      name: "Streetwear Launch V2",
+      spend: 31200,
+      roas: 3.4,
+      cpa: 38.2,
+      ctr: 1.9,
+      hookRate: 24.1,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "PeakFit Supplements",
+      name: "Pre-Workout Hero",
+      spend: 14800,
+      roas: 2.1,
+      cpa: 41.6,
+      ctr: 1.4,
+      hookRate: 17.2,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "Harbor & Co Furniture",
+      name: "Sofa Collection — Retarget",
+      spend: 9200,
+      roas: 1.4,
+      cpa: 88,
+      ctr: 0.9,
+      hookRate: 12.8,
+      status: "PAUSED",
+    },
+    {
+      clientName: "Brightline SaaS",
+      name: "Demo Request — Enterprise",
+      spend: 22100,
+      roas: 6.1,
+      cpa: 142,
+      ctr: 1.6,
+      hookRate: 31,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "Rove Travel Co",
+      name: "Iceland Adventure Push",
+      spend: 11400,
+      roas: 3.8,
+      cpa: 64,
+      ctr: 2.3,
+      hookRate: 26.7,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "Lumen Skincare",
+      name: "Branded Search",
+      spend: 6800,
+      roas: 8.2,
+      cpa: 12,
+      ctr: 4.1,
+      hookRate: 0,
+      status: "ACTIVE",
+    },
+    {
+      clientName: "Northwind Apparel",
+      name: "Holiday Bundles",
+      spend: 0,
+      roas: 0,
+      cpa: 0,
+      ctr: 0,
+      hookRate: 0,
+      status: "DRAFT",
+    },
   ];
 
   for (const cs of campaignsSeed) {
@@ -251,8 +330,17 @@ async function main() {
             reach: Math.round(spendDay * 180),
             clicks: Math.round(spendDay * 280 * (cs.ctr / 100)),
             ctr: (cs.ctr / 100).toFixed(4),
-            cpc: spendDay > 0 ? (spendDay / Math.max(1, Math.round(spendDay * 280 * (cs.ctr / 100)))).toFixed(4) : "0",
-            cpm: ((spendDay / Math.max(1, Math.round(spendDay * 280))) * 1000).toFixed(2),
+            cpc:
+              spendDay > 0
+                ? (
+                    spendDay /
+                    Math.max(1, Math.round(spendDay * 280 * (cs.ctr / 100)))
+                  ).toFixed(4)
+                : "0",
+            cpm: (
+              (spendDay / Math.max(1, Math.round(spendDay * 280))) *
+              1000
+            ).toFixed(2),
             purchases,
             conversions: purchases,
             conversionValue: (spendDay * cs.roas).toFixed(2),
@@ -274,14 +362,62 @@ async function main() {
     isWinner: boolean;
     gradient: string;
   }> = [
-    { clientName: "Lumen Skincare", name: "Glow Routine UGC #4", type: CreativeType.VIDEO, isWinner: true, gradient: "from-purple-500 to-pink-500" },
-    { clientName: "Lumen Skincare", name: "Before/After Carousel", type: CreativeType.CAROUSEL, isWinner: true, gradient: "from-cyan-400 to-blue-500" },
-    { clientName: "Northwind Apparel", name: "Streetwear Drop Teaser", type: CreativeType.VIDEO, isWinner: false, gradient: "from-orange-400 to-red-500" },
-    { clientName: "PeakFit Supplements", name: "PreWorkout Slam Cut", type: CreativeType.VIDEO, isWinner: false, gradient: "from-emerald-400 to-teal-500" },
-    { clientName: "Harbor & Co Furniture", name: "Sofa Showroom Reel", type: CreativeType.VIDEO, isWinner: false, gradient: "from-violet-500 to-purple-500" },
-    { clientName: "Brightline SaaS", name: "Demo Request Hero", type: CreativeType.IMAGE, isWinner: true, gradient: "from-pink-500 to-orange-500" },
-    { clientName: "Rove Travel Co", name: "Iceland Drone Shots", type: CreativeType.VIDEO, isWinner: true, gradient: "from-violet-400 to-fuchsia-500" },
-    { clientName: "Lumen Skincare", name: "Founder Story V2", type: CreativeType.VIDEO, isWinner: false, gradient: "from-sky-400 to-cyan-500" },
+    {
+      clientName: "Lumen Skincare",
+      name: "Glow Routine UGC #4",
+      type: CreativeType.VIDEO,
+      isWinner: true,
+      gradient: "from-purple-500 to-pink-500",
+    },
+    {
+      clientName: "Lumen Skincare",
+      name: "Before/After Carousel",
+      type: CreativeType.CAROUSEL,
+      isWinner: true,
+      gradient: "from-cyan-400 to-blue-500",
+    },
+    {
+      clientName: "Northwind Apparel",
+      name: "Streetwear Drop Teaser",
+      type: CreativeType.VIDEO,
+      isWinner: false,
+      gradient: "from-orange-400 to-red-500",
+    },
+    {
+      clientName: "PeakFit Supplements",
+      name: "PreWorkout Slam Cut",
+      type: CreativeType.VIDEO,
+      isWinner: false,
+      gradient: "from-emerald-400 to-teal-500",
+    },
+    {
+      clientName: "Harbor & Co Furniture",
+      name: "Sofa Showroom Reel",
+      type: CreativeType.VIDEO,
+      isWinner: false,
+      gradient: "from-violet-500 to-purple-500",
+    },
+    {
+      clientName: "Brightline SaaS",
+      name: "Demo Request Hero",
+      type: CreativeType.IMAGE,
+      isWinner: true,
+      gradient: "from-pink-500 to-orange-500",
+    },
+    {
+      clientName: "Rove Travel Co",
+      name: "Iceland Drone Shots",
+      type: CreativeType.VIDEO,
+      isWinner: true,
+      gradient: "from-violet-400 to-fuchsia-500",
+    },
+    {
+      clientName: "Lumen Skincare",
+      name: "Founder Story V2",
+      type: CreativeType.VIDEO,
+      isWinner: false,
+      gradient: "from-sky-400 to-cyan-500",
+    },
   ];
 
   for (const cs of creativesSeed) {
@@ -309,13 +445,62 @@ async function main() {
     rule?: string;
     source: TaskSource;
   }> = [
-    { clientName: "Harbor & Co Furniture", title: "Pause underperforming ad set: Sofa Retarget", priority: TaskPriority.HIGH, status: TaskStatus.TODO, rule: "ROAS < 1.5 for 3 days", source: TaskSource.RULE },
-    { clientName: "Lumen Skincare", title: "Scale Glow Routine UGC #4 +30%", priority: TaskPriority.HIGH, status: TaskStatus.TODO, rule: "ROAS > 4 + Hook > 30%", source: TaskSource.RULE },
-    { clientName: "Brightline SaaS", title: "Send weekly client report", priority: TaskPriority.LOW, status: TaskStatus.TODO, rule: "Every Monday 9am", source: TaskSource.MANUAL },
-    { clientName: "Northwind Apparel", title: "Update budget pacing — over by 12%", priority: TaskPriority.HIGH, status: TaskStatus.TODO, rule: "Spend pacing > 110%", source: TaskSource.RULE },
-    { clientName: "PeakFit Supplements", title: "Refresh creative — PreWorkout Slam Cut", priority: TaskPriority.MED, status: TaskStatus.IN_PROGRESS, rule: "Hook rate < 18%", source: TaskSource.RULE },
-    { clientName: "Northwind Apparel", title: "Launch new copy angle test", priority: TaskPriority.MED, status: TaskStatus.IN_PROGRESS, rule: "Weekly cadence", source: TaskSource.MANUAL },
-    { clientName: "Rove Travel Co", title: "Audit landing page conversion", priority: TaskPriority.MED, status: TaskStatus.DONE, rule: "CTR > 2% but CVR < 1.5%", source: TaskSource.RULE },
+    {
+      clientName: "Harbor & Co Furniture",
+      title: "Pause underperforming ad set: Sofa Retarget",
+      priority: TaskPriority.HIGH,
+      status: TaskStatus.TODO,
+      rule: "ROAS < 1.5 for 3 days",
+      source: TaskSource.RULE,
+    },
+    {
+      clientName: "Lumen Skincare",
+      title: "Scale Glow Routine UGC #4 +30%",
+      priority: TaskPriority.HIGH,
+      status: TaskStatus.TODO,
+      rule: "ROAS > 4 + Hook > 30%",
+      source: TaskSource.RULE,
+    },
+    {
+      clientName: "Brightline SaaS",
+      title: "Send weekly client report",
+      priority: TaskPriority.LOW,
+      status: TaskStatus.TODO,
+      rule: "Every Monday 9am",
+      source: TaskSource.MANUAL,
+    },
+    {
+      clientName: "Northwind Apparel",
+      title: "Update budget pacing — over by 12%",
+      priority: TaskPriority.HIGH,
+      status: TaskStatus.TODO,
+      rule: "Spend pacing > 110%",
+      source: TaskSource.RULE,
+    },
+    {
+      clientName: "PeakFit Supplements",
+      title: "Refresh creative — PreWorkout Slam Cut",
+      priority: TaskPriority.MED,
+      status: TaskStatus.IN_PROGRESS,
+      rule: "Hook rate < 18%",
+      source: TaskSource.RULE,
+    },
+    {
+      clientName: "Northwind Apparel",
+      title: "Launch new copy angle test",
+      priority: TaskPriority.MED,
+      status: TaskStatus.IN_PROGRESS,
+      rule: "Weekly cadence",
+      source: TaskSource.MANUAL,
+    },
+    {
+      clientName: "Rove Travel Co",
+      title: "Audit landing page conversion",
+      priority: TaskPriority.MED,
+      status: TaskStatus.DONE,
+      rule: "CTR > 2% but CVR < 1.5%",
+      source: TaskSource.RULE,
+    },
   ];
 
   for (const t of tasksSeed) {
@@ -337,10 +522,38 @@ async function main() {
 
   // --- Alerts (matches Urgent tasks panel) -------------------------------
   const alertsSeed = [
-    { clientName: "Harbor & Co Furniture", type: AlertType.ROAS_DROP, severity: AlertSeverity.CRITICAL, title: "ROAS dropped below 1.5 on Sofa Retarget", message: "ROAS < 1.5 for 3 consecutive days", rule: "ROAS < 1.5 for 3 days" },
-    { clientName: "Lumen Skincare", type: AlertType.OTHER, severity: AlertSeverity.WARNING, title: "Scale opportunity: Glow Routine UGC #4", message: "ROAS > 4 and hook rate > 30%. Consider scaling +30%.", rule: "ROAS > 4 + Hook > 30%" },
-    { clientName: "PeakFit Supplements", type: AlertType.CREATIVE_FATIGUE, severity: AlertSeverity.WARNING, title: "Hook rate drop on PreWorkout Slam Cut", message: "Hook rate fell below 18% over last 5 days.", rule: "Hook rate < 18%" },
-    { clientName: "Northwind Apparel", type: AlertType.SPEND_PACING_OVER, severity: AlertSeverity.WARNING, title: "Spend pacing over by 12%", message: "Month-to-date spend is pacing over budget.", rule: "Spend pacing > 110%" },
+    {
+      clientName: "Harbor & Co Furniture",
+      type: AlertType.ROAS_DROP,
+      severity: AlertSeverity.CRITICAL,
+      title: "ROAS dropped below 1.5 on Sofa Retarget",
+      message: "ROAS < 1.5 for 3 consecutive days",
+      rule: "ROAS < 1.5 for 3 days",
+    },
+    {
+      clientName: "Lumen Skincare",
+      type: AlertType.OTHER,
+      severity: AlertSeverity.WARNING,
+      title: "Scale opportunity: Glow Routine UGC #4",
+      message: "ROAS > 4 and hook rate > 30%. Consider scaling +30%.",
+      rule: "ROAS > 4 + Hook > 30%",
+    },
+    {
+      clientName: "PeakFit Supplements",
+      type: AlertType.CREATIVE_FATIGUE,
+      severity: AlertSeverity.WARNING,
+      title: "Hook rate drop on PreWorkout Slam Cut",
+      message: "Hook rate fell below 18% over last 5 days.",
+      rule: "Hook rate < 18%",
+    },
+    {
+      clientName: "Northwind Apparel",
+      type: AlertType.SPEND_PACING_OVER,
+      severity: AlertSeverity.WARNING,
+      title: "Spend pacing over by 12%",
+      message: "Month-to-date spend is pacing over budget.",
+      rule: "Spend pacing > 110%",
+    },
   ];
 
   for (const a of alertsSeed) {

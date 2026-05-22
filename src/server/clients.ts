@@ -35,29 +35,96 @@ export async function createClient(
   const parsed = createClientSchema.safeParse({
     name: formData.get("name"),
     industry: formData.get("industry"),
+    logoUrl: formData.get("logoUrl"),
     monthlyBudget: formData.get("monthlyBudget"),
-    targetCpa: formData.get("targetCpa"),
-    targetRoas: formData.get("targetRoas"),
+    minCpa: formData.get("minCpa"),
+    maxCpa: formData.get("maxCpa"),
+    minRoas: formData.get("minRoas"),
+    metaAdAccountId: formData.get("metaAdAccountId"),
+    metaAccountName: formData.get("metaAccountName"),
+    currency: formData.get("currency"),
+    timezone: formData.get("timezone"),
   });
 
   if (!parsed.success) {
     return { errors: flattenClientErrors(parsed.error) };
   }
 
-  const organizationId = await getOrgIdForUser(user.id);
   const data = parsed.data;
+  const organizationId = await getOrgIdForUser(user.id);
 
-  const created = await db.client.create({
-    data: {
-      organizationId,
-      name: data.name,
-      industry: data.industry,
-      monthlyBudget: data.monthlyBudget,
-      targetCpa: data.targetCpa,
-      targetRoas: data.targetRoas,
-      assignees: { create: { userId: user.id } },
-    },
-    select: { id: true },
+  // Determine whether full Meta connection is provided (all four fields).
+  const hasMeta =
+    data.metaAdAccountId !== undefined &&
+    data.metaAccountName !== undefined &&
+    data.currency !== undefined &&
+    data.timezone !== undefined;
+
+  if (hasMeta) {
+    const existing = await db.adAccountConnection.findUnique({
+      where: {
+        platform_platformAccountId: {
+          platform: "META",
+          platformAccountId: data.metaAdAccountId!,
+        },
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return {
+        errors: {
+          metaAdAccountId: [
+            "This Meta ad account is already attached to another client.",
+          ],
+        },
+      };
+    }
+  }
+
+  const result = await db.$transaction(async (tx) => {
+    const client = await tx.client.create({
+      data: {
+        organizationId,
+        name: data.name,
+        industry: data.industry,
+        logoUrl: data.logoUrl,
+        monthlyBudget: data.monthlyBudget,
+        minCpa: data.minCpa,
+        maxCpa: data.maxCpa,
+        minRoas: data.minRoas,
+        ...(data.currency ? { reportingCurrency: data.currency } : {}),
+        assignees: { create: { userId: user.id } },
+        ...(hasMeta
+          ? {
+              adAccountConnections: {
+                create: {
+                  platform: "META" as const,
+                  platformAccountId: data.metaAdAccountId!,
+                  accountName: data.metaAccountName!,
+                  currency: data.currency!,
+                  timezone: data.timezone!,
+                  status: "ACTIVE" as const,
+                  accessTokenEnc: null,
+                },
+              },
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        adAccountConnections: hasMeta
+          ? {
+              select: {
+                id: true,
+                platformAccountId: true,
+                currency: true,
+                timezone: true,
+              },
+            }
+          : false,
+      },
+    });
+    return client;
   });
 
   await writeAudit({
@@ -65,12 +132,42 @@ export async function createClient(
     organizationId,
     action: "client.create",
     entityType: "Client",
-    entityId: created.id,
-    metadata: { changes: data },
+    entityId: result.id,
+    metadata: {
+      changes: {
+        name: data.name,
+        industry: data.industry,
+        logoUrl: data.logoUrl,
+        monthlyBudget: data.monthlyBudget,
+        minCpa: data.minCpa,
+        maxCpa: data.maxCpa,
+        minRoas: data.minRoas,
+      },
+    },
   });
 
+  if (
+    hasMeta &&
+    result.adAccountConnections &&
+    result.adAccountConnections[0]
+  ) {
+    const conn = result.adAccountConnections[0];
+    await writeAudit({
+      userId: user.id,
+      organizationId,
+      action: "connection.create",
+      entityType: "AdAccountConnection",
+      entityId: conn.id,
+      metadata: {
+        platformAccountId: conn.platformAccountId,
+        currency: conn.currency,
+        timezone: conn.timezone,
+      },
+    });
+  }
+
   revalidatePath("/clients");
-  redirect(`/clients/${created.id}`);
+  redirect(`/clients/${result.id}`);
 }
 
 export async function updateClient(
@@ -95,9 +192,11 @@ export async function updateClient(
     data: {
       name: changes.name,
       industry: changes.industry,
+      logoUrl: changes.logoUrl,
       monthlyBudget: changes.monthlyBudget,
-      targetCpa: changes.targetCpa,
-      targetRoas: changes.targetRoas,
+      minCpa: changes.minCpa,
+      maxCpa: changes.maxCpa,
+      minRoas: changes.minRoas,
       status: changes.status,
       health: changes.health,
       notes: changes.notes,
