@@ -15,6 +15,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { ConnectMetaButton } from "@/components/integrations/connect-meta-button";
 import { DisconnectButton } from "@/components/integrations/disconnect-button";
+import { SyncNowButton } from "@/components/integrations/sync-now-button";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,7 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
       timezone: true,
       status: true,
       lastSyncedAt: true,
+      lastSyncError: true,
       accessTokenEnc: true,
       client: { select: { id: true, name: true } },
       _count: { select: { campaigns: true } },
@@ -94,6 +96,7 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
     timezone: c.timezone,
     status: c.status,
     lastSyncedAt: c.lastSyncedAt,
+    lastSyncError: c.lastSyncError,
     campaignCount: c._count.campaigns,
     hasToken: Boolean(c.accessTokenEnc),
   }));
@@ -180,7 +183,14 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
                     <TableCell className='font-medium'>
                       {r.clientName}
                     </TableCell>
-                    <TableCell>{r.accountName}</TableCell>
+                    <TableCell>
+                      {r.accountName}
+                      {r.lastSyncError && (
+                        <div className='max-w-[260px] text-[11px] text-destructive'>
+                          Last error: {r.lastSyncError}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <span className='font-mono text-xs'>
                         {r.platformAccountId}
@@ -206,7 +216,13 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
                     </TableCell>
                     <TableCell className='text-right'>
                       {r.hasToken ? (
-                        <DisconnectButton connectionId={r.id} />
+                        <div className='flex items-center justify-end gap-2'>
+                          <SyncNowButton
+                            connectionId={r.id}
+                            firstSync={r.lastSyncedAt === null}
+                          />
+                          <DisconnectButton connectionId={r.id} />
+                        </div>
                       ) : (
                         <ConnectMetaButton clientId={r.clientId} />
                       )}
