@@ -22,7 +22,6 @@ export const META_OAUTH_URL = `https://www.facebook.com/${META_API_VERSION}/dial
 export const META_SCOPES = [
   "ads_read",
   "business_management",
-  "read_insights",
   // Add "ads_management" later when you ship the auto-pause/scale feature
 ];
 
@@ -39,7 +38,10 @@ export interface OAuthState {
 export function signState(state: OAuthState): string {
   const secret = process.env.TOKEN_ENCRYPTION_KEY ?? "dev-secret";
   const payload = Buffer.from(JSON.stringify(state)).toString("base64url");
-  const sig = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  const sig = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64url");
   return `${payload}.${sig}`;
 }
 
@@ -47,10 +49,15 @@ export function verifyState(signed: string): OAuthState | null {
   const secret = process.env.TOKEN_ENCRYPTION_KEY ?? "dev-secret";
   const [payload, sig] = signed.split(".");
   if (!payload || !sig) return null;
-  const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64url");
   if (expected !== sig) return null;
   try {
-    const state = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as OAuthState;
+    const state = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    ) as OAuthState;
     // 10 minute expiry
     if (Date.now() - state.issuedAt > 10 * 60 * 1000) return null;
     return state;
@@ -84,8 +91,13 @@ export async function exchangeCodeForToken(code: string): Promise<{
     redirect_uri: process.env.META_OAUTH_REDIRECT_URL ?? "",
     code,
   });
-  const res = await fetch(`${META_GRAPH_URL}/oauth/access_token?${params.toString()}`);
-  if (!res.ok) throw new Error(`Meta token exchange failed: ${res.status} ${await res.text()}`);
+  const res = await fetch(
+    `${META_GRAPH_URL}/oauth/access_token?${params.toString()}`,
+  );
+  if (!res.ok)
+    throw new Error(
+      `Meta token exchange failed: ${res.status} ${await res.text()}`,
+    );
   return res.json();
 }
 
@@ -103,7 +115,12 @@ export async function exchangeForLongLivedToken(shortToken: string): Promise<{
     client_secret: process.env.META_APP_SECRET ?? "",
     fb_exchange_token: shortToken,
   });
-  const res = await fetch(`${META_GRAPH_URL}/oauth/access_token?${params.toString()}`);
-  if (!res.ok) throw new Error(`Meta long-lived token exchange failed: ${res.status} ${await res.text()}`);
+  const res = await fetch(
+    `${META_GRAPH_URL}/oauth/access_token?${params.toString()}`,
+  );
+  if (!res.ok)
+    throw new Error(
+      `Meta long-lived token exchange failed: ${res.status} ${await res.text()}`,
+    );
   return res.json();
 }
