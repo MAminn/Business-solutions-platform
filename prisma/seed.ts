@@ -172,7 +172,10 @@ async function main() {
       data: {
         clientId: client.id,
         platform: AdPlatform.META,
-        platformAccountId: `act_${Math.floor(Math.random() * 1e11)}`,
+        platformAccountId:
+          c.name === "Lumen Skincare"
+            ? "act_888528685688928"
+            : `act_${Math.floor(Math.random() * 1e11)}`,
         accountName: `${c.name} Meta Ads`,
         currency: "USD",
         timezone: "America/New_York",
