@@ -1,8 +1,25 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { NextRequest } from "next/server";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/**
+ * Returns the public-facing base URL for an incoming request.
+ * Uses X-Forwarded-Host + X-Forwarded-Proto headers (set by ngrok in
+ * dev and by Vercel in prod) when present, falling back to req.url
+ * otherwise. Prevents OAuth redirects from landing on localhost when
+ * the dev server is accessed via a proxy.
+ */
+export function getPublicBaseUrl(req: NextRequest): URL {
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const forwardedProto = req.headers.get("x-forwarded-proto") ?? "https";
+  if (forwardedHost) {
+    return new URL(`${forwardedProto}://${forwardedHost}`);
+  }
+  return new URL(req.url);
 }
 
 export function initials(name: string): string {

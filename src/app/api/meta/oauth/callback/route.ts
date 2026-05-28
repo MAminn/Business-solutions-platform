@@ -11,6 +11,7 @@ import {
   exchangeForLongLivedToken,
 } from "@/lib/meta/oauth";
 import { MetaClient } from "@/lib/meta/client";
+import { getPublicBaseUrl } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,19 +34,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (errorParam) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", req.url),
+      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
     );
   }
   if (!code || !stateRaw) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=invalid_state", req.url),
+      new URL("/settings/integrations?error=invalid_state", getPublicBaseUrl(req)),
     );
   }
 
   const state = verifyState(stateRaw);
   if (!state) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=invalid_state", req.url),
+      new URL("/settings/integrations?error=invalid_state", getPublicBaseUrl(req)),
     );
   }
 
@@ -54,14 +55,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     user = await requireUser();
   } catch {
     return NextResponse.redirect(
-      new URL("/sign-in?redirect=/settings/integrations", req.url),
+      new URL("/sign-in?redirect=/settings/integrations", getPublicBaseUrl(req)),
     );
   }
 
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(state.clientId)) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=forbidden", req.url),
+      new URL("/settings/integrations?error=forbidden", getPublicBaseUrl(req)),
     );
   }
 
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     shortLivedToken = r.access_token;
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", req.url),
+      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
     );
   }
 
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     expiresInSec = r.expires_in;
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", req.url),
+      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
     );
   }
 
@@ -93,7 +94,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     granted = await meta.listAdAccounts();
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", req.url),
+      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
     );
   }
 
@@ -114,7 +115,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (existing.length === 0) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?warning=no_match", req.url),
+      new URL("/settings/integrations?warning=no_match", getPublicBaseUrl(req)),
     );
   }
 
@@ -155,6 +156,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   return NextResponse.redirect(
-    new URL(`/settings/integrations?connected=${existing.length}`, req.url),
+    new URL(`/settings/integrations?connected=${existing.length}`, getPublicBaseUrl(req)),
   );
 }
