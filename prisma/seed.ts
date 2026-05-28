@@ -180,7 +180,7 @@ async function main() {
         currency: "USD",
         timezone: "America/New_York",
         status: ConnectionStatus.ACTIVE,
-        lastSyncedAt: new Date(),
+        lastSyncedAt: null,
       },
     });
 

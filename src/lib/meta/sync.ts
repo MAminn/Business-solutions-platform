@@ -48,7 +48,7 @@ async function getMetaClient(connectionId: string): Promise<{
 async function runJob<T>(
   connectionId: string,
   type: SyncJobType,
-  fn: () => Promise<{ recordsSynced: number; result: T }>
+  fn: () => Promise<{ recordsSynced: number; result: T }>,
 ): Promise<T> {
   const job = await db.syncJob.create({
     data: {
@@ -120,8 +120,12 @@ export async function syncStructural(connectionId: string): Promise<void> {
           objective: rc.objective,
           status: rc.status,
           effectiveStatus: rc.effective_status,
-          dailyBudget: rc.daily_budget ? Number(rc.daily_budget) / 100 : undefined,
-          lifetimeBudget: rc.lifetime_budget ? Number(rc.lifetime_budget) / 100 : undefined,
+          dailyBudget: rc.daily_budget
+            ? Number(rc.daily_budget) / 100
+            : undefined,
+          lifetimeBudget: rc.lifetime_budget
+            ? Number(rc.lifetime_budget) / 100
+            : undefined,
           buyingType: rc.buying_type,
           startTime: rc.start_time ? new Date(rc.start_time) : undefined,
           stopTime: rc.stop_time ? new Date(rc.stop_time) : undefined,
@@ -132,8 +136,12 @@ export async function syncStructural(connectionId: string): Promise<void> {
           name: rc.name,
           status: rc.status,
           effectiveStatus: rc.effective_status,
-          dailyBudget: rc.daily_budget ? Number(rc.daily_budget) / 100 : undefined,
-          lifetimeBudget: rc.lifetime_budget ? Number(rc.lifetime_budget) / 100 : undefined,
+          dailyBudget: rc.daily_budget
+            ? Number(rc.daily_budget) / 100
+            : undefined,
+          lifetimeBudget: rc.lifetime_budget
+            ? Number(rc.lifetime_budget) / 100
+            : undefined,
           raw: rc as unknown as object,
         },
       });
@@ -154,7 +162,10 @@ export async function syncStructural(connectionId: string): Promise<void> {
       for (const rs of remoteAdSets) {
         await db.adSet.upsert({
           where: {
-            campaignId_platformId: { campaignId: campaignRow.id, platformId: rs.id },
+            campaignId_platformId: {
+              campaignId: campaignRow.id,
+              platformId: rs.id,
+            },
           },
           create: {
             campaignId: campaignRow.id,
@@ -162,8 +173,12 @@ export async function syncStructural(connectionId: string): Promise<void> {
             name: rs.name,
             status: rs.status,
             effectiveStatus: rs.effective_status,
-            dailyBudget: rs.daily_budget ? Number(rs.daily_budget) / 100 : undefined,
-            lifetimeBudget: rs.lifetime_budget ? Number(rs.lifetime_budget) / 100 : undefined,
+            dailyBudget: rs.daily_budget
+              ? Number(rs.daily_budget) / 100
+              : undefined,
+            lifetimeBudget: rs.lifetime_budget
+              ? Number(rs.lifetime_budget) / 100
+              : undefined,
             optimizationGoal: rs.optimization_goal,
             billingEvent: rs.billing_event,
             bidStrategy: rs.bid_strategy,
@@ -181,14 +196,21 @@ export async function syncStructural(connectionId: string): Promise<void> {
         records++;
 
         const adSetRow = await db.adSet.findUnique({
-          where: { campaignId_platformId: { campaignId: campaignRow.id, platformId: rs.id } },
+          where: {
+            campaignId_platformId: {
+              campaignId: campaignRow.id,
+              platformId: rs.id,
+            },
+          },
         });
         if (!adSetRow) continue;
 
         const remoteAds = await meta.listAds(rs.id);
         for (const ra of remoteAds) {
           await db.ad.upsert({
-            where: { adSetId_platformId: { adSetId: adSetRow.id, platformId: ra.id } },
+            where: {
+              adSetId_platformId: { adSetId: adSetRow.id, platformId: ra.id },
+            },
             create: {
               adSetId: adSetRow.id,
               platformId: ra.id,
@@ -209,6 +231,60 @@ export async function syncStructural(connectionId: string): Promise<void> {
       }
     }
 
+    // Reconcile: delete campaigns (and their adsets, ads, polymorphic
+    // InsightsDaily rows) for this connection that Meta no longer returns.
+    // Without this, seed fakes or campaigns deleted in Meta would linger
+    // and cause per-object 400s during the insights pull.
+    const remotePlatformIds = remoteCampaigns.map((rc) => rc.id);
+    const staleCampaigns = await db.campaign.findMany({
+      where: {
+        adAccountConnectionId: connectionId,
+        platformId: { notIn: remotePlatformIds },
+      },
+      select: { id: true },
+    });
+
+    if (staleCampaigns.length > 0) {
+      const staleCampaignIds = staleCampaigns.map((c) => c.id);
+
+      const staleAdSets = await db.adSet.findMany({
+        where: { campaignId: { in: staleCampaignIds } },
+        select: { id: true },
+      });
+      const staleAdSetIds = staleAdSets.map((s) => s.id);
+
+      const staleAds = await db.ad.findMany({
+        where: { adSetId: { in: staleAdSetIds } },
+        select: { id: true },
+      });
+      const staleAdIds = staleAds.map((a) => a.id);
+
+      // InsightsDaily is polymorphic (entityType + entityId, no FK), so it
+      // is NOT removed by cascade — clean it up explicitly first.
+      await db.insightsDaily.deleteMany({
+        where: {
+          OR: [
+            {
+              entityType: InsightEntity.CAMPAIGN,
+              entityId: { in: staleCampaignIds },
+            },
+            {
+              entityType: InsightEntity.AD_SET,
+              entityId: { in: staleAdSetIds },
+            },
+            { entityType: InsightEntity.AD, entityId: { in: staleAdIds } },
+          ],
+        },
+      });
+
+      // Schema has onDelete: Cascade on AdSet.campaign and Ad.adSet, but
+      // delete in explicit order anyway — clearer and resilient to schema
+      // changes.
+      await db.ad.deleteMany({ where: { id: { in: staleAdIds } } });
+      await db.adSet.deleteMany({ where: { id: { in: staleAdSetIds } } });
+      await db.campaign.deleteMany({ where: { id: { in: staleCampaignIds } } });
+    }
+
     return { recordsSynced: records, result: undefined };
   });
 }
@@ -216,13 +292,20 @@ export async function syncStructural(connectionId: string): Promise<void> {
 // ============================================================================
 // 2. Incremental insights — last 2 days
 // ============================================================================
-export async function syncInsightsIncremental(connectionId: string): Promise<void> {
+export async function syncInsightsIncremental(
+  connectionId: string,
+): Promise<void> {
   await runJob(connectionId, SyncJobType.INSIGHTS_INCREMENTAL, async () => {
     const ctx = await getMetaClient(connectionId);
     if (!ctx) throw new Error("Connection not available");
     const since = format(subDays(new Date(), 2), "yyyy-MM-dd");
     const until = format(new Date(), "yyyy-MM-dd");
-    const count = await fetchInsightsForEntities(ctx, connectionId, since, until);
+    const count = await fetchInsightsForEntities(
+      ctx,
+      connectionId,
+      since,
+      until,
+    );
     return { recordsSynced: count, result: undefined };
   });
 }
@@ -232,14 +315,19 @@ export async function syncInsightsIncremental(connectionId: string): Promise<voi
 // ============================================================================
 export async function syncInsightsBackfill(
   connectionId: string,
-  days = 30
+  days = 30,
 ): Promise<void> {
   await runJob(connectionId, SyncJobType.INSIGHTS_BACKFILL, async () => {
     const ctx = await getMetaClient(connectionId);
     if (!ctx) throw new Error("Connection not available");
     const since = format(subDays(new Date(), days), "yyyy-MM-dd");
     const until = format(new Date(), "yyyy-MM-dd");
-    const count = await fetchInsightsForEntities(ctx, connectionId, since, until);
+    const count = await fetchInsightsForEntities(
+      ctx,
+      connectionId,
+      since,
+      until,
+    );
     return { recordsSynced: count, result: undefined };
   });
 }
@@ -251,13 +339,17 @@ async function fetchInsightsForEntities(
   ctx: NonNullable<Awaited<ReturnType<typeof getMetaClient>>>,
   connectionId: string,
   since: string,
-  until: string
+  until: string,
 ): Promise<number> {
   const { meta, platformAccountId } = ctx;
   let records = 0;
 
   // Account level
-  const accountInsights = await meta.getInsightsDaily(platformAccountId, since, until);
+  const accountInsights = await meta.getInsightsDaily(
+    platformAccountId,
+    since,
+    until,
+  );
   for (const ins of accountInsights) {
     await persistInsight(InsightEntity.ACCOUNT, connectionId, ins);
     records++;
@@ -269,14 +361,39 @@ async function fetchInsightsForEntities(
     select: { id: true, platformId: true },
   });
 
+  // Per-entity fetches are wrapped so a single failing object (e.g. an
+  // entity deleted in Meta between structural and insights sync) does not
+  // abort the entire job. If EVERY fetch fails we surface the error so the
+  // SyncJob is correctly marked FAILED rather than silently succeeding.
+  let perEntityAttempts = 0;
+  let perEntitySuccesses = 0;
+  const skipped: { entityId: string; message: string }[] = [];
+
   // TODO: For accounts with > 50 active ads switch to async batch reports:
   //   POST /act_x/insights with level=ad → returns a report_run_id, poll for state.
   for (const c of campaigns) {
-    const insights = await meta.getInsightsDaily(c.platformId, since, until);
-    for (const ins of insights) {
-      await persistInsight(InsightEntity.CAMPAIGN, c.id, ins);
-      records++;
+    perEntityAttempts++;
+    try {
+      const insights = await meta.getInsightsDaily(c.platformId, since, until);
+      for (const ins of insights) {
+        await persistInsight(InsightEntity.CAMPAIGN, c.id, ins);
+        records++;
+      }
+      perEntitySuccesses++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (skipped.length < 10) {
+        skipped.push({ entityId: c.platformId, message });
+      }
+      continue;
     }
+  }
+
+  if (perEntityAttempts > 0 && perEntitySuccesses === 0 && skipped.length > 0) {
+    const first = skipped[0]!;
+    throw new Error(
+      `All ${perEntityAttempts} insight fetches failed; first error (${first.entityId}): ${first.message}`,
+    );
   }
 
   return records;
@@ -285,12 +402,16 @@ async function fetchInsightsForEntities(
 async function persistInsight(
   entityType: InsightEntity,
   entityId: string,
-  ins: import("./client").MetaInsight
+  ins: import("./client").MetaInsight,
 ): Promise<void> {
   const purchase = ins.actions?.find((a) => a.action_type === "purchase");
-  const purchaseValue = ins.action_values?.find((a) => a.action_type === "purchase");
+  const purchaseValue = ins.action_values?.find(
+    (a) => a.action_type === "purchase",
+  );
   const purchaseRoas = ins.purchase_roas?.[0]?.value;
-  const video3s = ins.video_play_actions?.find((a) => a.action_type === "video_view");
+  const video3s = ins.video_play_actions?.find(
+    (a) => a.action_type === "video_view",
+  );
 
   const spend = ins.spend ? Number(ins.spend) : 0;
   const impressions = ins.impressions ? Number(ins.impressions) : 0;
@@ -318,7 +439,9 @@ async function persistInsight(
       frequency: ins.frequency ? Number(ins.frequency).toFixed(2) : null,
       conversions: purchases,
       purchases,
-      conversionValue: purchaseValue ? Number(purchaseValue.value).toFixed(2) : "0",
+      conversionValue: purchaseValue
+        ? Number(purchaseValue.value).toFixed(2)
+        : "0",
       roas: purchaseRoas ? Number(purchaseRoas).toFixed(4) : null,
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
       videoViews3s: video3s ? Number(video3s.value) : null,
@@ -346,7 +469,9 @@ async function persistInsight(
       spend: spend.toFixed(2),
       purchases,
       conversions: purchases,
-      conversionValue: purchaseValue ? Number(purchaseValue.value).toFixed(2) : "0",
+      conversionValue: purchaseValue
+        ? Number(purchaseValue.value).toFixed(2)
+        : "0",
       roas: purchaseRoas ? Number(purchaseRoas).toFixed(4) : null,
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
       raw: ins as unknown as object,
