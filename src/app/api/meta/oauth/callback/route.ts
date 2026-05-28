@@ -34,19 +34,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (errorParam) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=meta_exchange",
+        getPublicBaseUrl(req),
+      ),
     );
   }
   if (!code || !stateRaw) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=invalid_state", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=invalid_state",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
   const state = verifyState(stateRaw);
   if (!state) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=invalid_state", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=invalid_state",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -55,7 +64,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     user = await requireUser();
   } catch {
     return NextResponse.redirect(
-      new URL("/sign-in?redirect=/settings/integrations", getPublicBaseUrl(req)),
+      new URL(
+        "/sign-in?redirect=/settings/integrations",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -72,7 +84,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     shortLivedToken = r.access_token;
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=meta_exchange",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -84,7 +99,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     expiresInSec = r.expires_in;
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=meta_exchange",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -94,7 +112,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     granted = await meta.listAdAccounts();
   } catch {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=meta_exchange", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=meta_exchange",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -156,6 +177,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   return NextResponse.redirect(
-    new URL(`/settings/integrations?connected=${existing.length}`, getPublicBaseUrl(req)),
+    new URL(
+      `/settings/integrations?connected=${existing.length}`,
+      getPublicBaseUrl(req),
+    ),
   );
 }

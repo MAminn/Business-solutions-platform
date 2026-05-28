@@ -11,7 +11,10 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!process.env.META_APP_ID || !process.env.META_APP_SECRET) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?error=not_configured", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?error=not_configured",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
@@ -27,7 +30,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const accessible = await getAccessibleClientIds(user);
     if (!accessible.includes(clientId)) {
       return NextResponse.redirect(
-        new URL("/settings/integrations?error=forbidden", getPublicBaseUrl(req)),
+        new URL(
+          "/settings/integrations?error=forbidden",
+          getPublicBaseUrl(req),
+        ),
       );
     }
 
@@ -39,7 +45,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(buildAuthorizeUrl(state));
   } catch {
     return NextResponse.redirect(
-      new URL("/sign-in?redirect=/settings/integrations", getPublicBaseUrl(req)),
+      new URL(
+        "/sign-in?redirect=/settings/integrations",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 }
