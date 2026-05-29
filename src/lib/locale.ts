@@ -11,6 +11,7 @@ export const SUPPORTED_CURRENCIES = [
   "CHF",
   "SEK",
   "SGD",
+  "EGP",
 ] as const;
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 

@@ -188,7 +188,7 @@ export function ClientForm() {
         <div className='grid grid-cols-1 gap-5 md:grid-cols-2'>
           <Field
             id='client-monthly-budget'
-            label='Monthly budget (USD)'
+            label='Monthly budget'
             name='monthlyBudget'
             type='number'
             step='0.01'

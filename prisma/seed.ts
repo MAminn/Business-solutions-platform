@@ -174,7 +174,7 @@ async function main() {
         platform: AdPlatform.META,
         platformAccountId:
           c.name === "Lumen Skincare"
-            ? "act_888528685688928"
+            ? "act_88852868568892"
             : `act_${Math.floor(Math.random() * 1e11)}`,
         accountName: `${c.name} Meta Ads`,
         currency: "USD",
