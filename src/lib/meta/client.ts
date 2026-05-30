@@ -8,6 +8,52 @@
 
 import { META_GRAPH_URL } from "./oauth";
 
+export class MetaRateLimitError extends Error {
+  readonly isMetaRateLimit = true as const;
+  constructor(
+    public readonly endpoint: string,
+    public readonly metaCode: number,
+    public readonly metaSubcode: number | undefined,
+    public readonly userTitle: string | undefined,
+    public readonly userMsg: string | undefined,
+  ) {
+    super(
+      `Meta rate limit reached on ${endpoint} (code ${metaCode}` +
+        (metaSubcode ? `/${metaSubcode}` : "") +
+        `): ${userMsg ?? userTitle ?? "too many calls"}`,
+    );
+    this.name = "MetaRateLimitError";
+  }
+}
+
+export class MetaApiError extends Error {
+  readonly isMetaApiError = true as const;
+  constructor(
+    public readonly endpoint: string,
+    public readonly status: number,
+    public readonly metaCode: number | undefined,
+    public readonly metaSubcode: number | undefined,
+    public readonly body: string,
+  ) {
+    super(`Meta API ${status} on ${endpoint}: ${body}`);
+    this.name = "MetaApiError";
+  }
+}
+
+interface MetaErrorEnvelope {
+  error?: {
+    code?: number;
+    error_subcode?: number;
+    error_user_title?: string;
+    error_user_msg?: string;
+    message?: string;
+  };
+}
+
+function isMetaErrorEnvelope(value: unknown): value is MetaErrorEnvelope {
+  return typeof value === "object" && value !== null && "error" in value;
+}
+
 export interface MetaAdAccount {
   id: string;            // "act_xxxxx"
   name: string;
@@ -82,10 +128,30 @@ export class MetaClient {
     url.searchParams.set("access_token", this.accessToken);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
+    console.log(`[meta] GET ${path}`);
+    // Gentle inter-call spacing to remove burst pressure — not a real rate limiter.
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+
     const res = await fetch(url.toString(), { cache: "no-store" });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Meta API ${res.status} on ${path}: ${body}`);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        throw new MetaApiError(path, res.status, undefined, undefined, body);
+      }
+
+      const envelope = isMetaErrorEnvelope(parsed) ? parsed.error : undefined;
+      const code = envelope?.code;
+      const subcode = envelope?.error_subcode;
+      const userTitle = envelope?.error_user_title;
+      const userMsg = envelope?.error_user_msg;
+
+      if (code === 17 || code === 80004 || subcode === 2446079) {
+        throw new MetaRateLimitError(path, code ?? 17, subcode, userTitle, userMsg);
+      }
+      throw new MetaApiError(path, res.status, code, subcode, body);
     }
     return res.json() as Promise<T>;
   }

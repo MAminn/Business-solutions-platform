@@ -75,18 +75,20 @@ async function runJob<T>(
     });
     return result;
   } catch (err) {
+    const isRateLimit = err instanceof Error && err.name === "MetaRateLimitError";
     const message = err instanceof Error ? err.message : String(err);
+    const persisted = isRateLimit ? `RATE_LIMIT: ${message}` : message;
     await db.syncJob.update({
       where: { id: job.id },
       data: {
         status: SyncJobStatus.FAILED,
-        errorMessage: message,
+        errorMessage: persisted,
         completedAt: new Date(),
       },
     });
     await db.adAccountConnection.update({
       where: { id: connectionId },
-      data: { lastSyncError: message },
+      data: { lastSyncError: persisted },
     });
     throw err;
   }

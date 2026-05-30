@@ -70,6 +70,12 @@ export async function syncConnectionNow(input: {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown sync error";
+    const isRateLimit =
+      (err instanceof Error && err.name === "MetaRateLimitError") ||
+      message.startsWith("RATE_LIMIT:");
+    const userError = isRateLimit
+      ? "Meta rate limit reached for this ad account. Wait 30–60 minutes and try again. (Meta error code 17)"
+      : message.slice(0, 500);
     try {
       const orgId = await getOrgIdForUser(user.id);
       await writeAudit({
@@ -83,12 +89,13 @@ export async function syncConnectionNow(input: {
           platformAccountId: conn.platformAccountId,
           mode,
           error: message.slice(0, 500),
+          ...(isRateLimit ? { rateLimit: true } : {}),
         },
       });
     } catch {
       // Audit failure should not mask the original error.
     }
-    return { ok: false, error: message };
+    return { ok: false, error: userError };
   }
 
   const orgId = await getOrgIdForUser(user.id);
