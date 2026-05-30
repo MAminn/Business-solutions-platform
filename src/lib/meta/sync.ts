@@ -75,7 +75,8 @@ async function runJob<T>(
     });
     return result;
   } catch (err) {
-    const isRateLimit = err instanceof Error && err.name === "MetaRateLimitError";
+    const isRateLimit =
+      err instanceof Error && err.name === "MetaRateLimitError";
     const message = err instanceof Error ? err.message : String(err);
     const persisted = isRateLimit ? `RATE_LIMIT: ${message}` : message;
     await db.syncJob.update({

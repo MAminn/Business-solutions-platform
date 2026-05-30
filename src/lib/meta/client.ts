@@ -55,9 +55,9 @@ function isMetaErrorEnvelope(value: unknown): value is MetaErrorEnvelope {
 }
 
 export interface MetaAdAccount {
-  id: string;            // "act_xxxxx"
+  id: string; // "act_xxxxx"
   name: string;
-  account_id: string;    // numeric
+  account_id: string; // numeric
   currency: string;
   timezone_name: string;
   account_status: number;
@@ -123,7 +123,10 @@ export interface MetaInsight {
 export class MetaClient {
   constructor(private readonly accessToken: string) {}
 
-  private async get<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  private async get<T>(
+    path: string,
+    params: Record<string, string> = {},
+  ): Promise<T> {
     const url = new URL(`${META_GRAPH_URL}${path}`);
     url.searchParams.set("access_token", this.accessToken);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -149,7 +152,13 @@ export class MetaClient {
       const userMsg = envelope?.error_user_msg;
 
       if (code === 17 || code === 80004 || subcode === 2446079) {
-        throw new MetaRateLimitError(path, code ?? 17, subcode, userTitle, userMsg);
+        throw new MetaRateLimitError(
+          path,
+          code ?? 17,
+          subcode,
+          userTitle,
+          userMsg,
+        );
       }
       throw new MetaApiError(path, res.status, code, subcode, body);
     }
@@ -165,20 +174,26 @@ export class MetaClient {
   }
 
   async listCampaigns(adAccountId: string): Promise<MetaCampaign[]> {
-    const data = await this.get<{ data: MetaCampaign[] }>(`/${adAccountId}/campaigns`, {
-      fields:
-        "id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,start_time,stop_time,special_ad_categories",
-      limit: "200",
-    });
+    const data = await this.get<{ data: MetaCampaign[] }>(
+      `/${adAccountId}/campaigns`,
+      {
+        fields:
+          "id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,start_time,stop_time,special_ad_categories",
+        limit: "200",
+      },
+    );
     return data.data;
   }
 
   async listAdSets(campaignId: string): Promise<MetaAdSet[]> {
-    const data = await this.get<{ data: MetaAdSet[] }>(`/${campaignId}/adsets`, {
-      fields:
-        "id,name,status,effective_status,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,start_time,end_time",
-      limit: "200",
-    });
+    const data = await this.get<{ data: MetaAdSet[] }>(
+      `/${campaignId}/adsets`,
+      {
+        fields:
+          "id,name,status,effective_status,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,start_time,end_time",
+        limit: "200",
+      },
+    );
     return data.data;
   }
 
@@ -193,16 +208,19 @@ export class MetaClient {
   async getInsightsDaily(
     entityId: string,
     sinceDate: string,
-    untilDate: string
+    untilDate: string,
   ): Promise<MetaInsight[]> {
-    const data = await this.get<{ data: MetaInsight[] }>(`/${entityId}/insights`, {
-      time_increment: "1",
-      time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
-      fields:
-        "impressions,reach,clicks,spend,ctr,cpc,cpm,frequency,actions,action_values,purchase_roas,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions",
-      action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
-      limit: "500",
-    });
+    const data = await this.get<{ data: MetaInsight[] }>(
+      `/${entityId}/insights`,
+      {
+        time_increment: "1",
+        time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
+        fields:
+          "impressions,reach,clicks,spend,ctr,cpc,cpm,frequency,actions,action_values,purchase_roas,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions",
+        action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+        limit: "500",
+      },
+    );
     return data.data;
   }
 }
