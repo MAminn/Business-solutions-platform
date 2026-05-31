@@ -454,6 +454,66 @@ async function main() {
     });
   }
 
+  // --- Link ads → creatives and seed AD-level insights -------------------
+  // The Creatives page aggregates InsightsDaily where entityType = AD via
+  // Creative → Ad. Seed data only had CAMPAIGN-level rows, so link each ad to
+  // a creative for the same client and copy its campaign's daily rows down to
+  // the ad (entityType = AD) so per-creative spend/ROAS/CPA/CTR render.
+  for (const { connection } of createdClients) {
+    const ads = await prisma.ad.findMany({
+      where: { adSet: { campaign: { adAccountConnectionId: connection.id } } },
+      select: { id: true, adSet: { select: { campaignId: true } } },
+    });
+    const creatives = await prisma.creative.findMany({
+      where: { adAccountConnectionId: connection.id },
+      select: { id: true },
+    });
+
+    for (let i = 0; i < ads.length; i++) {
+      const ad = ads[i]!;
+      const creative =
+        creatives.length > 0 ? creatives[i % creatives.length]! : null;
+
+      if (creative) {
+        await prisma.ad.update({
+          where: { id: ad.id },
+          data: { creativeId: creative.id },
+        });
+      }
+
+      const campaignInsights = await prisma.insightsDaily.findMany({
+        where: {
+          entityType: InsightEntity.CAMPAIGN,
+          entityId: ad.adSet.campaignId,
+        },
+      });
+
+      for (const ci of campaignInsights) {
+        await prisma.insightsDaily.create({
+          data: {
+            entityType: InsightEntity.AD,
+            entityId: ad.id,
+            date: ci.date,
+            spend: ci.spend,
+            impressions: ci.impressions,
+            reach: ci.reach,
+            clicks: ci.clicks,
+            ctr: ci.ctr,
+            cpc: ci.cpc,
+            cpm: ci.cpm,
+            purchases: ci.purchases,
+            conversions: ci.conversions,
+            conversionValue: ci.conversionValue,
+            roas: ci.roas,
+            cpa: ci.cpa,
+            frequency: ci.frequency,
+            hookRate: ci.hookRate,
+          },
+        });
+      }
+    }
+  }
+
   // --- Tasks (matches Ops kanban screenshot) -----------------------------
   const tasksSeed: Array<{
     clientName: string;

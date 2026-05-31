@@ -475,21 +475,33 @@ async function fetchInsightsForEntities(
     select: { id: true, platformId: true },
   });
 
+  let adInsightRecords = 0;
+  let adsWithInsights = 0;
+  let adsSkipped = 0;
+
   for (const a of ads) {
     try {
       const insights = await meta.getInsightsDaily(a.platformId, since, until);
+      if (insights.length > 0) adsWithInsights++;
       for (const ins of insights) {
         await persistInsight(InsightEntity.AD, a.id, ins);
         records++;
+        adInsightRecords++;
       }
     } catch (err) {
       // On rate limit, stop cleanly — continuing would spam Meta and every
       // remaining ad would fail anyway. runJob marks the job RATE_LIMIT.
       if (err instanceof MetaRateLimitError) throw err;
       // Otherwise skip this ad; account/campaign data is already saved.
+      adsSkipped++;
       continue;
     }
   }
+
+  console.log(
+    `[meta] ad-level insights: ${adInsightRecords} rows across ` +
+      `${adsWithInsights}/${ads.length} ads (${adsSkipped} skipped)`,
+  );
 
   return records;
 }

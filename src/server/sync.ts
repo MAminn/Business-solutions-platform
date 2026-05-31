@@ -115,6 +115,7 @@ export async function syncConnectionNow(input: {
   revalidatePath("/settings/integrations");
   revalidatePath(`/clients/${conn.clientId}/ad-account`);
   revalidatePath(`/clients/${conn.clientId}/campaigns`);
+  revalidatePath(`/clients/${conn.clientId}/creatives`);
   revalidatePath(`/clients/${conn.clientId}`);
   revalidatePath("/dashboard");
 
