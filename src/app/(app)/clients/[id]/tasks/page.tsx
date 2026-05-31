@@ -25,12 +25,23 @@ export default async function ClientTasksPage({ params }: PageProps) {
     select: {
       id: true,
       title: true,
+      description: true,
       rule: true,
       priority: true,
       status: true,
       source: true,
       createdAt: true,
       client: { select: { id: true, name: true } },
+      attachments: {
+        select: {
+          id: true,
+          fileName: true,
+          url: true,
+          size: true,
+          mimeType: true,
+        },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: { createdAt: "desc" },
   });

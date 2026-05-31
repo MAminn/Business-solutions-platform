@@ -91,12 +91,24 @@ export interface MetaAdSet {
   end_time?: string;
 }
 
+export interface MetaCreative {
+  id: string;
+  name?: string;
+  thumbnail_url?: string;
+  image_url?: string;
+  video_id?: string;
+  body?: string;
+  title?: string;
+  call_to_action_type?: string;
+  object_type?: string;
+}
+
 export interface MetaAd {
   id: string;
   name: string;
   status?: string;
   effective_status?: string;
-  creative?: { id: string };
+  creative?: MetaCreative;
 }
 
 export interface MetaInsight {
@@ -199,7 +211,8 @@ export class MetaClient {
 
   async listAds(adSetId: string): Promise<MetaAd[]> {
     const data = await this.get<{ data: MetaAd[] }>(`/${adSetId}/ads`, {
-      fields: "id,name,status,effective_status,creative{id}",
+      fields:
+        "id,name,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type}",
       limit: "200",
     });
     return data.data;

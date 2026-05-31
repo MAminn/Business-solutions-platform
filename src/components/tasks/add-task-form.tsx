@@ -133,6 +133,39 @@ export function AddTaskForm({
           </div>
         </div>
 
+        <div className='grid grid-cols-1 gap-3 md:grid-cols-12'>
+          <div className='md:col-span-8'>
+            <Label htmlFor='task-description'>Description</Label>
+            <textarea
+              id='task-description'
+              name='description'
+              rows={3}
+              maxLength={2000}
+              placeholder='Add context, steps, or notes (optional)'
+              className={`mt-1.5 min-h-[72px] ${selectClasses} h-auto py-2`}
+            />
+            {state.errors?.description && (
+              <p className='mt-1 text-xs text-destructive'>
+                {state.errors.description[0]}
+              </p>
+            )}
+          </div>
+
+          <div className='md:col-span-4'>
+            <Label htmlFor='task-attachments'>Attachments</Label>
+            <Input
+              id='task-attachments'
+              name='attachments'
+              type='file'
+              multiple
+              className='mt-1.5 cursor-pointer file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs'
+            />
+            <p className='mt-1 text-xs text-muted-foreground'>
+              Up to 10 MB per file.
+            </p>
+          </div>
+        </div>
+
         {state.errors?._form && (
           <p className='text-xs text-destructive'>{state.errors._form[0]}</p>
         )}

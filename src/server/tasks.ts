@@ -6,6 +6,7 @@ import type { User } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { writeAudit } from "@/server/audit";
+import { storeTaskAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/uploads";
 import {
   createTaskSchema,
   updateTaskStatusSchema,
@@ -54,8 +55,8 @@ export async function createTask(
     title: formData.get("title"),
     priority: formData.get("priority"),
     status: statusRaw === null || statusRaw === "" ? "TODO" : statusRaw,
-    description: formData.get("description"),
-    rule: formData.get("rule"),
+    description: formData.get("description") ?? undefined,
+    rule: formData.get("rule") ?? undefined,
   });
 
   if (!parsed.success) {
@@ -64,6 +65,19 @@ export async function createTask(
 
   const data = parsed.data;
   await assertAccessToClient(user, data.clientId);
+
+  const files = formData
+    .getAll("attachments")
+    .filter((f): f is File => f instanceof File && f.size > 0);
+
+  const oversized = files.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+  if (oversized) {
+    return {
+      errors: {
+        _form: [`"${oversized.name}" exceeds the 10 MB attachment limit.`],
+      },
+    };
+  }
 
   const task = await db.task.create({
     data: {
@@ -79,6 +93,21 @@ export async function createTask(
     select: { id: true, clientId: true },
   });
 
+  if (files.length > 0) {
+    const stored = await Promise.all(
+      files.map((file) => storeTaskAttachment(task.id, file)),
+    );
+    await db.taskAttachment.createMany({
+      data: stored.map((s) => ({
+        taskId: task.id,
+        fileName: s.fileName,
+        url: s.url,
+        size: s.size,
+        mimeType: s.mimeType,
+      })),
+    });
+  }
+
   const organizationId = await getOrgIdForUser(user.id);
   await writeAudit({
     userId: user.id,
@@ -92,6 +121,7 @@ export async function createTask(
       priority: data.priority,
       status: data.status,
       source: "MANUAL",
+      attachmentCount: files.length,
     },
   });
 

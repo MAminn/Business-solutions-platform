@@ -1,18 +1,29 @@
 import type { TaskPriority, TaskStatus, TaskSource } from "@prisma/client";
+import { Paperclip } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { MoveTaskButton } from "@/components/tasks/move-task-button";
 
+export interface KanbanAttachment {
+  id: string;
+  fileName: string;
+  url: string;
+  size: number;
+  mimeType: string;
+}
+
 export interface KanbanTask {
   id: string;
   title: string;
+  description?: string | null;
   rule: string | null;
   priority: TaskPriority;
   status: TaskStatus;
   source: TaskSource;
   client: { id: string; name: string };
   createdAt: Date;
+  attachments?: KanbanAttachment[];
 }
 
 interface KanbanBoardProps {
@@ -55,6 +66,12 @@ function sortTasks(a: KanbanTask, b: KanbanTask): number {
   const diff = PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority];
   if (diff !== 0) return diff;
   return b.createdAt.getTime() - a.createdAt.getTime();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function KanbanBoard({
@@ -108,10 +125,35 @@ export function KanbanBoard({
                       <p className='mt-2 text-sm font-medium leading-snug'>
                         {task.title}
                       </p>
+                      {task.description && task.description.length > 0 && (
+                        <p className='mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground'>
+                          {task.description}
+                        </p>
+                      )}
                       {subtitle.length > 0 && (
                         <p className='mt-1 text-xs text-muted-foreground'>
                           {subtitle}
                         </p>
+                      )}
+                      {task.attachments && task.attachments.length > 0 && (
+                        <ul className='mt-2 space-y-1'>
+                          {task.attachments.map((att) => (
+                            <li key={att.id}>
+                              <a
+                                href={att.url}
+                                target='_blank'
+                                rel='noopener noreferrer'
+                                download={att.fileName}
+                                className='inline-flex max-w-full items-center gap-1.5 text-xs text-primary underline-offset-2 hover:underline'>
+                                <Paperclip className='h-3 w-3 shrink-0' />
+                                <span className='truncate'>{att.fileName}</span>
+                                <span className='shrink-0 text-muted-foreground'>
+                                  ({formatBytes(att.size)})
+                                </span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
                       )}
                       {showRuleRow && (
                         <p className='mt-2 flex items-center gap-1.5'>

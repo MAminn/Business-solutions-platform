@@ -16,14 +16,71 @@
 
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { MetaClient } from "./client";
+import { MetaClient, MetaRateLimitError } from "./client";
+import type { MetaCreative } from "./client";
 import {
   SyncJobType,
   SyncJobStatus,
   InsightEntity,
   ConnectionStatus,
+  CreativeType,
 } from "@prisma/client";
 import { format, subDays } from "date-fns";
+
+function mapCreativeType(creative: MetaCreative): CreativeType {
+  const objectType = (creative.object_type ?? "").toUpperCase();
+  if (creative.video_id || objectType === "VIDEO") return CreativeType.VIDEO;
+  if (
+    objectType === "PHOTO" ||
+    objectType === "IMAGE" ||
+    objectType === "SHARE"
+  ) {
+    return CreativeType.IMAGE;
+  }
+  if (objectType === "CAROUSEL") return CreativeType.CAROUSEL;
+  return CreativeType.IMAGE;
+}
+
+/**
+ * Upserts an ad's creative into the Creative table (keyed by
+ * connection + platform creative id) and returns the internal Creative.id
+ * so the ad can be linked. Returns null when the ad has no creative.
+ */
+async function upsertCreative(
+  connectionId: string,
+  adName: string,
+  creative: MetaCreative | undefined,
+): Promise<string | null> {
+  if (!creative?.id) return null;
+
+  const data = {
+    name: creative.name ?? adName ?? creative.id,
+    type: mapCreativeType(creative),
+    thumbnailUrl: creative.thumbnail_url,
+    imageUrl: creative.image_url,
+    bodyText: creative.body,
+    headline: creative.title,
+    callToAction: creative.call_to_action_type,
+    raw: creative as unknown as object,
+  };
+
+  const row = await db.creative.upsert({
+    where: {
+      adAccountConnectionId_platformId: {
+        adAccountConnectionId: connectionId,
+        platformId: creative.id,
+      },
+    },
+    create: {
+      adAccountConnectionId: connectionId,
+      platformId: creative.id,
+      ...data,
+    },
+    update: data,
+    select: { id: true },
+  });
+  return row.id;
+}
 
 async function getMetaClient(connectionId: string): Promise<{
   meta: MetaClient;
@@ -210,6 +267,11 @@ export async function syncStructural(connectionId: string): Promise<void> {
 
         const remoteAds = await meta.listAds(rs.id);
         for (const ra of remoteAds) {
+          const creativeId = await upsertCreative(
+            connectionId,
+            ra.name,
+            ra.creative,
+          );
           await db.ad.upsert({
             where: {
               adSetId_platformId: { adSetId: adSetRow.id, platformId: ra.id },
@@ -220,12 +282,14 @@ export async function syncStructural(connectionId: string): Promise<void> {
               name: ra.name,
               status: ra.status,
               effectiveStatus: ra.effective_status,
+              creativeId: creativeId ?? undefined,
               raw: ra as unknown as object,
             },
             update: {
               name: ra.name,
               status: ra.status,
               effectiveStatus: ra.effective_status,
+              creativeId: creativeId ?? undefined,
               raw: ra as unknown as object,
             },
           });
@@ -384,6 +448,9 @@ async function fetchInsightsForEntities(
       }
       perEntitySuccesses++;
     } catch (err) {
+      // A rate limit will affect every subsequent call — stop now and let
+      // runJob mark the job RATE_LIMIT rather than hammering the API.
+      if (err instanceof MetaRateLimitError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       if (skipped.length < 10) {
         skipped.push({ entityId: c.platformId, message });
@@ -397,6 +464,31 @@ async function fetchInsightsForEntities(
     throw new Error(
       `All ${perEntityAttempts} insight fetches failed; first error (${first.entityId}): ${first.message}`,
     );
+  }
+
+  // Ads — ad-level insights power the Creatives analytics. Pulled per ad
+  // with the same resilient skip-and-continue behaviour as campaigns so a
+  // single deleted ad cannot abort the job. (Account/campaign success above
+  // already guards the "everything failed" case, so ad failures only warn.)
+  const ads = await db.ad.findMany({
+    where: { adSet: { campaign: { adAccountConnectionId: connectionId } } },
+    select: { id: true, platformId: true },
+  });
+
+  for (const a of ads) {
+    try {
+      const insights = await meta.getInsightsDaily(a.platformId, since, until);
+      for (const ins of insights) {
+        await persistInsight(InsightEntity.AD, a.id, ins);
+        records++;
+      }
+    } catch (err) {
+      // On rate limit, stop cleanly — continuing would spam Meta and every
+      // remaining ad would fail anyway. runJob marks the job RATE_LIMIT.
+      if (err instanceof MetaRateLimitError) throw err;
+      // Otherwise skip this ad; account/campaign data is already saved.
+      continue;
+    }
   }
 
   return records;

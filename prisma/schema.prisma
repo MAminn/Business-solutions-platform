@@ -491,9 +491,25 @@ model Task {
   assignee   User?  @relation("TaskAssignee", fields: [assigneeId], references: [id])
   createdBy  User?  @relation("TaskCreatedBy", fields: [createdById], references: [id])
 
+  attachments TaskAttachment[]
+
   @@index([clientId, status])
   @@index([assigneeId, status])
   @@index([priority])
+}
+
+model TaskAttachment {
+  id        String   @id @default(cuid())
+  taskId    String
+  fileName  String
+  url       String
+  size      Int
+  mimeType  String
+  createdAt DateTime @default(now())
+
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
 }
 
 enum RecommendationAction {
