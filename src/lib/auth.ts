@@ -8,6 +8,7 @@
 
 import { auth as clerkAuth, currentUser as clerkCurrentUser } from "@clerk/nextjs/server";
 import { db } from "./db";
+import { Prisma } from "@prisma/client";
 import type { User, UserRole } from "@prisma/client";
 
 export function isClerkConfigured(): boolean {
@@ -30,15 +31,28 @@ export async function getCurrentUser(): Promise<User | null> {
     const cu = await clerkCurrentUser();
     if (!cu) return null;
     const email = cu.emailAddresses[0]?.emailAddress ?? `${userId}@unknown`;
-    user = await db.user.create({
-      data: {
-        clerkId: userId,
-        email,
-        name: [cu.firstName, cu.lastName].filter(Boolean).join(" ") || null,
-        avatarUrl: cu.imageUrl,
-        role: "TEAM",
-      },
-    });
+    try {
+      user = await db.user.create({
+        data: {
+          clerkId: userId,
+          email,
+          name: [cu.firstName, cu.lastName].filter(Boolean).join(" ") || null,
+          avatarUrl: cu.imageUrl,
+          role: "TEAM",
+        },
+      });
+    } catch (err) {
+      // A concurrent request may have created this user first. Treat the
+      // unique-constraint violation on clerkId as a benign race and return
+      // the existing record.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        return db.user.findUnique({ where: { clerkId: userId } });
+      }
+      throw err;
+    }
   }
   return user;
 }
