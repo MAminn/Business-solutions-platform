@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { ClientSubNav } from "@/components/clients/sub-nav";
+
+export const dynamic = "force-dynamic";
 import { AddTaskForm } from "@/components/tasks/add-task-form";
 import { KanbanBoard } from "@/components/tasks/kanban-board";
 

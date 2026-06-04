@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { AddTaskForm } from "@/components/tasks/add-task-form";
 import { KanbanBoard } from "@/components/tasks/kanban-board";
 
+export const dynamic = "force-dynamic";
+
 export default async function OpsPage() {
   const user = await requireUser();
   const accessible = await getAccessibleClientIds(user);

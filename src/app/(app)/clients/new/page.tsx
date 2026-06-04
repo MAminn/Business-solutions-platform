@@ -7,6 +7,8 @@ import {
 } from "@/components/ui/card";
 import { ClientForm } from "@/components/clients/client-form";
 
+export const dynamic = "force-dynamic";
+
 export default function NewClientPage() {
   return (
     <div className='mx-auto w-full max-w-2xl space-y-6'>

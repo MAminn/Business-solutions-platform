@@ -1,9 +1,18 @@
-import { Download, Plus, DollarSign, TrendingUp, Users, Sparkles } from "lucide-react";
+import {
+  Download,
+  Plus,
+  DollarSign,
+  TrendingUp,
+  Users,
+  Sparkles,
+} from "lucide-react";
 import { subDays, startOfMonth } from "date-fns";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { KpiCard } from "@/components/dashboard/kpi-card";
+
+export const dynamic = "force-dynamic";
 import { SpendRoasChart } from "@/components/dashboard/spend-roas-chart";
 import { UrgentTasks } from "@/components/dashboard/urgent-tasks";
 import { ActiveClients } from "@/components/dashboard/active-clients";
@@ -57,7 +66,8 @@ export default async function DashboardPage() {
   });
   const campaignIds = campaigns.map((c) => c.id);
   const campaignToClient = new Map<string, string>();
-  for (const c of campaigns) campaignToClient.set(c.id, c.adAccountConnection.clientId);
+  for (const c of campaigns)
+    campaignToClient.set(c.id, c.adAccountConnection.clientId);
 
   // ---- Aggregates --------------------------------------------------------
   const [
@@ -74,7 +84,11 @@ export default async function DashboardPage() {
     clientsForList,
   ] = await Promise.all([
     db.insightsDaily.aggregate({
-      where: { entityType: "CAMPAIGN", entityId: { in: campaignIds }, date: { gte: d30 } },
+      where: {
+        entityType: "CAMPAIGN",
+        entityId: { in: campaignIds },
+        date: { gte: d30 },
+      },
       _sum: { spend: true, conversionValue: true },
     }),
     db.insightsDaily.aggregate({
@@ -87,7 +101,11 @@ export default async function DashboardPage() {
     }),
     db.insightsDaily.groupBy({
       by: ["entityId"],
-      where: { entityType: "CAMPAIGN", entityId: { in: campaignIds }, date: { gte: d30 } },
+      where: {
+        entityType: "CAMPAIGN",
+        entityId: { in: campaignIds },
+        date: { gte: d30 },
+      },
       _sum: { spend: true, conversionValue: true },
     }),
     db.insightsDaily.groupBy({
@@ -101,7 +119,11 @@ export default async function DashboardPage() {
     }),
     db.insightsDaily.groupBy({
       by: ["date"],
-      where: { entityType: "CAMPAIGN", entityId: { in: campaignIds }, date: { gte: d30 } },
+      where: {
+        entityType: "CAMPAIGN",
+        entityId: { in: campaignIds },
+        date: { gte: d30 },
+      },
       _sum: { spend: true },
       orderBy: { date: "asc" },
     }),
@@ -149,14 +171,16 @@ export default async function DashboardPage() {
   // ---- KPI: Spend Under Management --------------------------------------
   const spend30 = num(sum30._sum.spend);
   const spendPrev = num(sum60to30._sum.spend);
-  const spendDeltaPct = spendPrev > 0 ? ((spend30 - spendPrev) / spendPrev) * 100 : 0;
+  const spendDeltaPct =
+    spendPrev > 0 ? ((spend30 - spendPrev) / spendPrev) * 100 : 0;
 
   // ---- KPI: Average ROAS (weighted) -------------------------------------
   const conv30 = num(sum30._sum.conversionValue);
   const convPrev = num(sum60to30._sum.conversionValue);
   const roas30 = spend30 > 0 ? conv30 / spend30 : 0;
   const roasPrev = spendPrev > 0 ? convPrev / spendPrev : 0;
-  const roasDeltaPct = roasPrev > 0 ? ((roas30 - roasPrev) / roasPrev) * 100 : 0;
+  const roasDeltaPct =
+    roasPrev > 0 ? ((roas30 - roasPrev) / roasPrev) * 100 : 0;
 
   // ---- KPI: Active Clients ----------------------------------------------
   const activeDelta = activeCount - activeOlderThan90;
@@ -169,7 +193,10 @@ export default async function DashboardPage() {
   for (const row of sumByCampaignMtd) {
     const clientId = campaignToClient.get(row.entityId);
     if (!clientId) continue;
-    mtdByClient.set(clientId, (mtdByClient.get(clientId) ?? 0) + num(row._sum.spend));
+    mtdByClient.set(
+      clientId,
+      (mtdByClient.get(clientId) ?? 0) + num(row._sum.spend),
+    );
   }
   const last30ByClient = new Map<string, { spend: number; conv: number }>();
   for (const row of sumByCampaign30) {
@@ -189,7 +216,9 @@ export default async function DashboardPage() {
     pacing: number;
     roas: number;
   }> = clientsForList
-    .filter((c): c is typeof c & { status: ClientStatus } => c.status === "ACTIVE")
+    .filter(
+      (c): c is typeof c & { status: ClientStatus } => c.status === "ACTIVE",
+    )
     .map((c) => {
       const budget = num(c.monthlyBudget);
       const mtd = mtdByClient.get(c.id) ?? 0;
@@ -230,33 +259,33 @@ export default async function DashboardPage() {
   const part = greetingPart(now);
 
   return (
-    <div className="space-y-8">
+    <div className='space-y-8'>
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className='flex items-start justify-between gap-4'>
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className='text-2xl font-semibold tracking-tight'>
             Good {part}, {firstName}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className='mt-1 text-sm text-muted-foreground'>
             Here&apos;s how your portfolio is performing today.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <Download className="h-4 w-4" />
+        <div className='flex items-center gap-2'>
+          <Button variant='outline' size='sm'>
+            <Download className='h-4 w-4' />
             Export
           </Button>
-          <Button size="sm">
-            <Plus className="h-4 w-4" />
+          <Button size='sm'>
+            <Plus className='h-4 w-4' />
             New campaign
           </Button>
         </div>
       </div>
 
       {/* KPI grid */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'>
         <KpiCard
-          label="Spend Under Management"
+          label='Spend Under Management'
           value={formatCurrencyCompact(spend30)}
           delta={{
             value: formatDelta(spendDeltaPct),
@@ -266,7 +295,7 @@ export default async function DashboardPage() {
           icon={DollarSign}
         />
         <KpiCard
-          label="Average ROAS"
+          label='Average ROAS'
           value={formatMultiplier(roas30)}
           delta={{
             value: formatDelta(roasDeltaPct),
@@ -276,7 +305,7 @@ export default async function DashboardPage() {
           icon={TrendingUp}
         />
         <KpiCard
-          label="Active Clients"
+          label='Active Clients'
           value={String(activeCount)}
           delta={{
             value: `${activeDelta >= 0 ? "+" : ""}${activeDelta}`,
@@ -286,7 +315,7 @@ export default async function DashboardPage() {
           icon={Users}
         />
         <KpiCard
-          label="Winning Creatives"
+          label='Winning Creatives'
           value={String(winningTotal)}
           delta={{
             value: `${winnersDelta >= 0 ? "+" : ""}${winnersDelta}`,
@@ -298,8 +327,8 @@ export default async function DashboardPage() {
       </div>
 
       {/* Chart + Urgent tasks */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className='grid grid-cols-1 gap-4 lg:grid-cols-3'>
+        <div className='lg:col-span-2'>
           <SpendRoasChart data={chartData} />
         </div>
         <UrgentTasks tasks={urgentTasks} />

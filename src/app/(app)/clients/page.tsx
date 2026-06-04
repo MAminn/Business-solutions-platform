@@ -5,6 +5,8 @@ import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
+
+export const dynamic = "force-dynamic";
 import { ClientCard } from "@/components/clients/client-card";
 
 function num(value: unknown): number {

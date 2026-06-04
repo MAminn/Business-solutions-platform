@@ -6,13 +6,12 @@ import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+
+export const dynamic = "force-dynamic";
 import { Progress } from "@/components/ui/progress";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { AddObjectiveForm } from "@/components/clients/add-objective-form";
-import {
-  OBJECTIVE_LABEL,
-  normalizeMetaObjective,
-} from "@/lib/meta/objectives";
+import { OBJECTIVE_LABEL, normalizeMetaObjective } from "@/lib/meta/objectives";
 import {
   formatCurrency,
   formatCurrencyExact,
@@ -34,10 +33,7 @@ function num(value: unknown): number {
   return Number(value);
 }
 
-const STATUS_VARIANT: Record<
-  StrategyStatus,
-  "success" | "info" | "muted"
-> = {
+const STATUS_VARIANT: Record<StrategyStatus, "success" | "info" | "muted"> = {
   ACTIVE: "success",
   DRAFT: "info",
   ARCHIVED: "muted",
@@ -73,9 +69,7 @@ export default async function StrategyPage({ params }: PageProps) {
   const header = (
     <div className='space-y-4'>
       <div>
-        <h1 className='text-2xl font-semibold tracking-tight'>
-          {client.name}
-        </h1>
+        <h1 className='text-2xl font-semibold tracking-tight'>{client.name}</h1>
         {client.industry && (
           <p className='mt-1 text-sm text-muted-foreground'>
             {client.industry}
@@ -203,14 +197,15 @@ export default async function StrategyPage({ params }: PageProps) {
         (maxCpa === 0 || overallCpa <= maxCpa);
   const roasMet =
     totalSpend === 0 ? null : minRoas === 0 ? true : overallRoas >= minRoas;
-  const revenueMet =
-    revenueGoal === 0 ? null : totalRevenue >= revenueGoal;
+  const revenueMet = revenueGoal === 0 ? null : totalRevenue >= revenueGoal;
 
   // Tracked objective ids for already-budgeted types.
   const budgetedTypes = new Set(strategy.objectives.map((o) => o.type));
   const unbudgetedTypes = (
     Object.keys(OBJECTIVE_LABEL) as CampaignObjectiveType[]
-  ).filter((t) => !budgetedTypes.has(t) && (byObjective.get(t)?.spend ?? 0) > 0);
+  ).filter(
+    (t) => !budgetedTypes.has(t) && (byObjective.get(t)?.spend ?? 0) > 0,
+  );
 
   const availableTypes = (
     Object.keys(OBJECTIVE_LABEL) as CampaignObjectiveType[]
@@ -286,9 +281,7 @@ export default async function StrategyPage({ params }: PageProps) {
             <Stat label='Spent' value={formatCurrency(totalSpend)} />
             <Stat
               label='Remaining'
-              value={
-                monthlyBudget > 0 ? formatCurrency(remainingBudget) : "—"
-              }
+              value={monthlyBudget > 0 ? formatCurrency(remainingBudget) : "—"}
             />
             <Stat label='Revenue' value={formatCurrency(totalRevenue)} />
             <Stat
@@ -363,7 +356,10 @@ export default async function StrategyPage({ params }: PageProps) {
                   </CardHeader>
                   <CardContent className='space-y-3'>
                     <div className='grid grid-cols-2 gap-2 text-xs'>
-                      <Stat label='Allocated' value={formatCurrency(allocated)} />
+                      <Stat
+                        label='Allocated'
+                        value={formatCurrency(allocated)}
+                      />
                       <Stat
                         label='Spent'
                         value={formatCurrency(actual.spend)}
