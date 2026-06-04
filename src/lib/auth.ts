@@ -60,7 +60,45 @@ export async function getCurrentUser(): Promise<User | null> {
       throw err;
     }
   }
-  return user;
+
+  return ensureOrganizationMembership(user);
+}
+
+/**
+ * Ensures the user belongs to an organization. The very first production user
+ * (no existing memberships and no existing OWNER) bootstraps the default
+ * organization and becomes its OWNER. Existing members are returned unchanged.
+ */
+async function ensureOrganizationMembership(user: User): Promise<User> {
+  const existingMembership = await db.organizationMember.findFirst({
+    where: { userId: user.id },
+  });
+  if (existingMembership) return user;
+
+  const ownerCount = await db.organizationMember.count({
+    where: { role: "OWNER" },
+  });
+  if (ownerCount > 0) return user;
+
+  // First real production user: promote to OWNER and bootstrap the default org.
+  const org = await db.organization.upsert({
+    where: { slug: "mediabuyer-agency" },
+    update: {},
+    create: { name: "Mediabuyer Agency", slug: "mediabuyer-agency" },
+  });
+
+  await db.organizationMember.upsert({
+    where: {
+      organizationId_userId: { organizationId: org.id, userId: user.id },
+    },
+    update: { role: "OWNER" },
+    create: { organizationId: org.id, userId: user.id, role: "OWNER" },
+  });
+
+  return db.user.update({
+    where: { id: user.id },
+    data: { role: "OWNER" },
+  });
 }
 
 export async function requireUser(): Promise<User> {
