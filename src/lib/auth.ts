@@ -6,13 +6,19 @@
  * boots up immediately after seeding. Never deploy without Clerk keys.
  */
 
-import { auth as clerkAuth, currentUser as clerkCurrentUser } from "@clerk/nextjs/server";
+import {
+  auth as clerkAuth,
+  currentUser as clerkCurrentUser,
+} from "@clerk/nextjs/server";
 import { db } from "./db";
 import { Prisma } from "@prisma/client";
 import type { User, UserRole } from "@prisma/client";
 
 export function isClerkConfigured(): boolean {
-  return Boolean(process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  return Boolean(
+    process.env.CLERK_SECRET_KEY &&
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+  );
 }
 
 /**
