@@ -171,10 +171,11 @@ export async function syncStructural(connectionId: string): Promise<void> {
 
     let records = 0;
 
-    // Campaigns
+    // ---- 1. Campaigns (account-level, paginated) ------------------------
     const remoteCampaigns = await meta.listCampaigns(platformAccountId);
+    const campaignByPlatformId = new Map<string, string>();
     for (const rc of remoteCampaigns) {
-      await db.campaign.upsert({
+      const campaign = await db.campaign.upsert({
         where: {
           adAccountConnectionId_platformId: {
             adAccountConnectionId: connectionId,
@@ -213,127 +214,149 @@ export async function syncStructural(connectionId: string): Promise<void> {
           raw: rc as unknown as object,
         },
       });
+      campaignByPlatformId.set(rc.id, campaign.id);
       records++;
-
-      // Ad sets for this campaign
-      const campaignRow = await db.campaign.findUnique({
-        where: {
-          adAccountConnectionId_platformId: {
-            adAccountConnectionId: connectionId,
-            platformId: rc.id,
-          },
-        },
-      });
-      if (!campaignRow) continue;
-
-      const remoteAdSets = await meta.listAdSets(rc.id);
-      for (const rs of remoteAdSets) {
-        await db.adSet.upsert({
-          where: {
-            campaignId_platformId: {
-              campaignId: campaignRow.id,
-              platformId: rs.id,
-            },
-          },
-          create: {
-            campaignId: campaignRow.id,
-            platformId: rs.id,
-            name: rs.name,
-            status: rs.status,
-            effectiveStatus: rs.effective_status,
-            dailyBudget: rs.daily_budget
-              ? Number(rs.daily_budget) / 100
-              : undefined,
-            lifetimeBudget: rs.lifetime_budget
-              ? Number(rs.lifetime_budget) / 100
-              : undefined,
-            optimizationGoal: rs.optimization_goal,
-            billingEvent: rs.billing_event,
-            bidStrategy: rs.bid_strategy,
-            startTime: rs.start_time ? new Date(rs.start_time) : undefined,
-            endTime: rs.end_time ? new Date(rs.end_time) : undefined,
-            raw: rs as unknown as object,
-          },
-          update: {
-            name: rs.name,
-            status: rs.status,
-            effectiveStatus: rs.effective_status,
-            raw: rs as unknown as object,
-          },
-        });
-        records++;
-
-        const adSetRow = await db.adSet.findUnique({
-          where: {
-            campaignId_platformId: {
-              campaignId: campaignRow.id,
-              platformId: rs.id,
-            },
-          },
-        });
-        if (!adSetRow) continue;
-
-        const remoteAds = await meta.listAds(rs.id);
-        for (const ra of remoteAds) {
-          const creativeId = await upsertCreative(
-            connectionId,
-            ra.name,
-            ra.creative,
-          );
-          await db.ad.upsert({
-            where: {
-              adSetId_platformId: { adSetId: adSetRow.id, platformId: ra.id },
-            },
-            create: {
-              adSetId: adSetRow.id,
-              platformId: ra.id,
-              name: ra.name,
-              status: ra.status,
-              effectiveStatus: ra.effective_status,
-              creativeId: creativeId ?? undefined,
-              raw: ra as unknown as object,
-            },
-            update: {
-              name: ra.name,
-              status: ra.status,
-              effectiveStatus: ra.effective_status,
-              creativeId: creativeId ?? undefined,
-              raw: ra as unknown as object,
-            },
-          });
-          records++;
-        }
-      }
     }
 
-    // Reconcile: delete campaigns (and their adsets, ads, polymorphic
-    // InsightsDaily rows) for this connection that Meta no longer returns.
-    // Without this, seed fakes or campaigns deleted in Meta would linger
-    // and cause per-object 400s during the insights pull.
-    const remotePlatformIds = remoteCampaigns.map((rc) => rc.id);
+    // ---- 2. Ad sets (account-level, paginated) --------------------------
+    const remoteAdSets = await meta.listAccountAdSets(platformAccountId);
+    const adSetByPlatformId = new Map<string, string>();
+    let adSetsSkipped = 0;
+    for (const rs of remoteAdSets) {
+      const campaignLocalId = rs.campaign_id
+        ? campaignByPlatformId.get(rs.campaign_id)
+        : undefined;
+      // Parent campaign not in the live set (deleted/orphaned) — skip safely.
+      if (!campaignLocalId) {
+        adSetsSkipped++;
+        continue;
+      }
+      const adSet = await db.adSet.upsert({
+        where: {
+          campaignId_platformId: {
+            campaignId: campaignLocalId,
+            platformId: rs.id,
+          },
+        },
+        create: {
+          campaignId: campaignLocalId,
+          platformId: rs.id,
+          name: rs.name,
+          status: rs.status,
+          effectiveStatus: rs.effective_status,
+          dailyBudget: rs.daily_budget
+            ? Number(rs.daily_budget) / 100
+            : undefined,
+          lifetimeBudget: rs.lifetime_budget
+            ? Number(rs.lifetime_budget) / 100
+            : undefined,
+          optimizationGoal: rs.optimization_goal,
+          billingEvent: rs.billing_event,
+          bidStrategy: rs.bid_strategy,
+          startTime: rs.start_time ? new Date(rs.start_time) : undefined,
+          endTime: rs.end_time ? new Date(rs.end_time) : undefined,
+          raw: rs as unknown as object,
+        },
+        update: {
+          name: rs.name,
+          status: rs.status,
+          effectiveStatus: rs.effective_status,
+          raw: rs as unknown as object,
+        },
+      });
+      adSetByPlatformId.set(rs.id, adSet.id);
+      records++;
+    }
+
+    // ---- 3. Ads (account-level, paginated) ------------------------------
+    const remoteAds = await meta.listAccountAds(platformAccountId);
+    let adsSkipped = 0;
+    for (const ra of remoteAds) {
+      const adSetLocalId = ra.adset_id
+        ? adSetByPlatformId.get(ra.adset_id)
+        : undefined;
+      // Parent adset not in the live set (deleted/orphaned) — skip safely.
+      if (!adSetLocalId) {
+        adsSkipped++;
+        continue;
+      }
+      const creativeId = await upsertCreative(
+        connectionId,
+        ra.name,
+        ra.creative,
+      );
+      await db.ad.upsert({
+        where: {
+          adSetId_platformId: { adSetId: adSetLocalId, platformId: ra.id },
+        },
+        create: {
+          adSetId: adSetLocalId,
+          platformId: ra.id,
+          name: ra.name,
+          status: ra.status,
+          effectiveStatus: ra.effective_status,
+          creativeId: creativeId ?? undefined,
+          raw: ra as unknown as object,
+        },
+        update: {
+          name: ra.name,
+          status: ra.status,
+          effectiveStatus: ra.effective_status,
+          creativeId: creativeId ?? undefined,
+          raw: ra as unknown as object,
+        },
+      });
+      records++;
+    }
+
+    console.log(
+      `[meta] structural sync: ${remoteCampaigns.length} campaigns, ` +
+        `${remoteAdSets.length} adsets (${adSetsSkipped} orphaned), ` +
+        `${remoteAds.length} ads (${adsSkipped} orphaned)`,
+    );
+
+    // ---- Reconcile / stale-entity cleanup -------------------------------
+    // Account-level fetching gives us the complete live set in one place, so
+    // we can prune every entity Meta no longer returns — not just whole
+    // deleted campaigns, but individual deleted adsets/ads under a campaign
+    // that still exists. Without this, seed fakes or deleted entities linger
+    // and pollute downstream metrics.
+    const remoteCampaignIds = remoteCampaigns.map((rc) => rc.id);
+    const remoteAdSetIds = remoteAdSets.map((rs) => rs.id);
+    const remoteAdIds = remoteAds.map((ra) => ra.id);
+
     const staleCampaigns = await db.campaign.findMany({
       where: {
         adAccountConnectionId: connectionId,
-        platformId: { notIn: remotePlatformIds },
+        platformId: { notIn: remoteCampaignIds },
       },
       select: { id: true },
     });
+    const staleCampaignIds = staleCampaigns.map((c) => c.id);
 
-    if (staleCampaigns.length > 0) {
-      const staleCampaignIds = staleCampaigns.map((c) => c.id);
+    const staleAdSets = await db.adSet.findMany({
+      where: {
+        campaign: { adAccountConnectionId: connectionId },
+        platformId: { notIn: remoteAdSetIds },
+      },
+      select: { id: true },
+    });
+    const staleAdSetIds = staleAdSets.map((s) => s.id);
 
-      const staleAdSets = await db.adSet.findMany({
-        where: { campaignId: { in: staleCampaignIds } },
-        select: { id: true },
-      });
-      const staleAdSetIds = staleAdSets.map((s) => s.id);
+    const staleAds = await db.ad.findMany({
+      where: {
+        adSet: { campaign: { adAccountConnectionId: connectionId } },
+        platformId: { notIn: remoteAdIds },
+      },
+      select: { id: true },
+    });
+    const staleAdIds = staleAds.map((a) => a.id);
 
-      const staleAds = await db.ad.findMany({
-        where: { adSetId: { in: staleAdSetIds } },
-        select: { id: true },
-      });
-      const staleAdIds = staleAds.map((a) => a.id);
-
+    if (
+      staleCampaignIds.length > 0 ||
+      staleAdSetIds.length > 0 ||
+      staleAdIds.length > 0
+    ) {
       // InsightsDaily is polymorphic (entityType + entityId, no FK), so it
       // is NOT removed by cascade — clean it up explicitly first.
       await db.insightsDaily.deleteMany({
@@ -353,8 +376,8 @@ export async function syncStructural(connectionId: string): Promise<void> {
       });
 
       // Schema has onDelete: Cascade on AdSet.campaign and Ad.adSet, but
-      // delete in explicit order anyway — clearer and resilient to schema
-      // changes.
+      // delete in explicit child→parent order anyway — clearer and resilient
+      // to schema changes.
       await db.ad.deleteMany({ where: { id: { in: staleAdIds } } });
       await db.adSet.deleteMany({ where: { id: { in: staleAdSetIds } } });
       await db.campaign.deleteMany({ where: { id: { in: staleCampaignIds } } });

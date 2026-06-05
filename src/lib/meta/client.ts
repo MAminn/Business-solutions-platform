@@ -80,6 +80,9 @@ export interface MetaCampaign {
 export interface MetaAdSet {
   id: string;
   name: string;
+  // Present when adsets are listed at the account level (used to map a row
+  // back to its parent campaign).
+  campaign_id?: string;
   status?: string;
   effective_status?: string;
   daily_budget?: string;
@@ -106,6 +109,10 @@ export interface MetaCreative {
 export interface MetaAd {
   id: string;
   name: string;
+  // Present when ads are listed at the account level (used to map a row back
+  // to its parent adset / campaign).
+  adset_id?: string;
+  campaign_id?: string;
   status?: string;
   effective_status?: string;
   creative?: MetaCreative;
@@ -174,6 +181,38 @@ export class MetaClient {
     return this.request<T>(absoluteUrl, label);
   }
 
+  /**
+   * Fetch every page of a paginated edge by following Meta's `paging.next`
+   * cursor URLs until exhausted. The same guard bound used by
+   * `getAccountInsightsByLevel` protects against a pathological cursor.
+   */
+  private async getAllPages<T>(
+    path: string,
+    params: Record<string, string>,
+    label: string,
+  ): Promise<T[]> {
+    const rows: T[] = [];
+    let page = await this.get<{ data: T[]; paging?: { next?: string } }>(
+      path,
+      params,
+    );
+    rows.push(...page.data);
+
+    let next = page.paging?.next;
+    let guard = 0;
+    while (next && guard < 1000) {
+      guard++;
+      page = await this.getAbsolute<{ data: T[]; paging?: { next?: string } }>(
+        next,
+        `${label} (page ${guard + 1})`,
+      );
+      rows.push(...page.data);
+      next = page.paging?.next;
+    }
+
+    return rows;
+  }
+
   private async request<T>(fullUrl: string, label: string): Promise<T> {
     console.log(`[meta] GET ${label}`);
     // Gentle inter-call spacing to remove burst pressure — not a real rate limiter.
@@ -218,15 +257,17 @@ export class MetaClient {
   }
 
   async listCampaigns(adAccountId: string): Promise<MetaCampaign[]> {
-    const data = await this.get<{ data: MetaCampaign[] }>(
+    // Account-level edge — follow cursor pagination to completion so large
+    // accounts return every campaign, not just the first page.
+    return this.getAllPages<MetaCampaign>(
       `/${adAccountId}/campaigns`,
       {
         fields:
           "id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,start_time,stop_time,special_ad_categories",
-        limit: "200",
+        limit: "500",
       },
+      `/${adAccountId}/campaigns`,
     );
-    return data.data;
   }
 
   async listAdSets(campaignId: string): Promise<MetaAdSet[]> {
@@ -241,6 +282,24 @@ export class MetaClient {
     return data.data;
   }
 
+  /**
+   * All adsets for an ad account in one paginated call (replaces one
+   * `/{campaign_id}/adsets` request per campaign, which trips Meta rate limit
+   * code 17 / 2446079 on large accounts). Rows carry `campaign_id` so callers
+   * can map each adset to its parent campaign.
+   */
+  async listAccountAdSets(adAccountId: string): Promise<MetaAdSet[]> {
+    return this.getAllPages<MetaAdSet>(
+      `/${adAccountId}/adsets`,
+      {
+        fields:
+          "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,start_time,end_time",
+        limit: "500",
+      },
+      `/${adAccountId}/adsets`,
+    );
+  }
+
   async listAds(adSetId: string): Promise<MetaAd[]> {
     const data = await this.get<{ data: MetaAd[] }>(`/${adSetId}/ads`, {
       fields:
@@ -248,6 +307,24 @@ export class MetaClient {
       limit: "200",
     });
     return data.data;
+  }
+
+  /**
+   * All ads for an ad account in one paginated call (replaces one
+   * `/{adset_id}/ads` request per adset). Rows carry `adset_id` and
+   * `campaign_id` for mapping, and the full nested `creative` block so the
+   * Creatives tab keeps populating exactly as before.
+   */
+  async listAccountAds(adAccountId: string): Promise<MetaAd[]> {
+    return this.getAllPages<MetaAd>(
+      `/${adAccountId}/ads`,
+      {
+        fields:
+          "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type}",
+        limit: "500",
+      },
+      `/${adAccountId}/ads`,
+    );
   }
 
   async getInsightsDaily(
