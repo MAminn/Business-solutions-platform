@@ -10,18 +10,20 @@ import { writeAudit } from "@/server/audit";
 import { encryptToken } from "@/lib/encryption";
 import {
   META_PENDING_COOKIE,
-  parsePendingSession,
+  loadPendingSession,
+  deletePendingSession,
   decryptPendingToken,
 } from "@/lib/meta/pending-session";
 
 /**
  * Finalize a pending Meta OAuth flow.
  *
- * Reads the held (encrypted) token from the pending-session cookie, validates
- * the user still has access to the target client, and creates/updates
- * AdAccountConnection rows ONLY for the ad accounts the user selected. The
- * selected MetaAppProfile is recorded on every connection so future sync /
- * refresh uses the org's own app credentials (never env for new connections).
+ * Reads the held (encrypted) token from the DB-backed pending session
+ * (referenced by a random id in the cookie), validates the user still has
+ * access to the target client, and creates/updates AdAccountConnection rows
+ * ONLY for the ad accounts the user selected. The selected MetaAppProfile is
+ * recorded on every connection so future sync / refresh uses the org's own app
+ * credentials (never env for new connections).
  */
 
 const confirmSchema = z.object({
@@ -40,6 +42,11 @@ async function getOrgIdForUser(userId: string): Promise<string> {
   return member.organizationId;
 }
 
+/** Clear the pending-session cookie. */
+function clearPendingCookie(cookieStore: ReturnType<typeof cookies>): void {
+  cookieStore.set(META_PENDING_COOKIE, "", { path: "/", maxAge: 0 });
+}
+
 export type ConfirmResult =
   | { ok: true; created: number; clientId: string }
   | { ok: false; error: string };
@@ -49,6 +56,8 @@ export async function confirmMetaAdAccounts(input: {
 }): Promise<ConfirmResult> {
   const user = await requireUser();
 
+  // Recoverable validation: a bad selection must NOT consume the pending
+  // session, so the user can correct it and retry.
   const parsed = confirmSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -58,9 +67,8 @@ export async function confirmMetaAdAccounts(input: {
   }
 
   const cookieStore = cookies();
-  const session = parsePendingSession(
-    cookieStore.get(META_PENDING_COOKIE)?.value,
-  );
+  const cookieId = cookieStore.get(META_PENDING_COOKIE)?.value;
+  const session = await loadPendingSession(cookieId, user.id);
   if (!session) {
     return {
       ok: false,
@@ -72,6 +80,8 @@ export async function confirmMetaAdAccounts(input: {
   // Scope: the user must still have access to the target client.
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(session.clientId)) {
+    await deletePendingSession(cookieId);
+    clearPendingCookie(cookieStore);
     return { ok: false, error: "You do not have access to that client." };
   }
 
@@ -83,6 +93,8 @@ export async function confirmMetaAdAccounts(input: {
     select: { id: true },
   });
   if (!profile) {
+    await deletePendingSession(cookieId);
+    clearPendingCookie(cookieStore);
     return {
       ok: false,
       error: "Selected Meta App Profile is no longer available.",
@@ -95,12 +107,14 @@ export async function confirmMetaAdAccounts(input: {
     grantedById.has(id),
   );
   if (chosen.length === 0) {
+    await deletePendingSession(cookieId);
+    clearPendingCookie(cookieStore);
     return { ok: false, error: "None of the selected ad accounts are valid." };
   }
 
   const token = decryptPendingToken(session);
   const tokenEnc = encryptToken(token);
-  const expiresAt = new Date(session.tokenExpiresAt);
+  const expiresAt = session.tokenExpiresAt;
 
   let created = 0;
   for (const accountId of chosen) {
@@ -183,7 +197,8 @@ export async function confirmMetaAdAccounts(input: {
   }
 
   // Consume the pending session so the token can't be reused.
-  cookieStore.set(META_PENDING_COOKIE, "", { path: "/", maxAge: 0 });
+  await deletePendingSession(cookieId);
+  clearPendingCookie(cookieStore);
 
   if (created === 0) {
     return {
@@ -201,6 +216,8 @@ export async function confirmMetaAdAccounts(input: {
 export async function cancelMetaConnection(): Promise<{ ok: true }> {
   await requireUser();
   const cookieStore = cookies();
-  cookieStore.set(META_PENDING_COOKIE, "", { path: "/", maxAge: 0 });
+  const cookieId = cookieStore.get(META_PENDING_COOKIE)?.value;
+  await deletePendingSession(cookieId);
+  clearPendingCookie(cookieStore);
   return { ok: true };
 }

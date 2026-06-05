@@ -14,7 +14,7 @@ import { getPublicBaseUrl } from "@/lib/utils";
 import {
   META_PENDING_COOKIE,
   PENDING_COOKIE_MAX_AGE_SEC,
-  serializePendingSession,
+  createPendingSession,
   type PendingAdAccount,
 } from "@/lib/meta/pending-session";
 
@@ -192,9 +192,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     ? new Date(Date.now() + expiresInSec * 1000)
     : new Date(Date.now() + 60 * 24 * 3600 * 1000);
 
-  // Do NOT auto-create connections. Hold the (encrypted) token + account list
-  // in a short-lived signed cookie and redirect to the selection screen.
-  const cookieValue = serializePendingSession({
+  // Do NOT auto-create connections. Persist the (encrypted) token + account
+  // list in a short-lived DB row and store ONLY the random session id in the
+  // cookie, then redirect to the selection screen. Using the DB avoids the
+  // browser cookie size limit for accounts with many ad accounts.
+  const sessionId = await createPendingSession({
+    userId: user.id,
+    organizationId,
     clientId: state.clientId,
     metaAppProfileId: profile.id,
     accessToken: longLivedToken,
@@ -205,7 +209,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const res = NextResponse.redirect(
     new URL("/settings/integrations/select", getPublicBaseUrl(req)),
   );
-  res.cookies.set(META_PENDING_COOKIE, cookieValue, {
+  res.cookies.set(META_PENDING_COOKIE, sessionId, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

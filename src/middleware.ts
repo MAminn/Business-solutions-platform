@@ -6,10 +6,11 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/meta/oauth/callback",
+  "/api/cron/purge-meta-oauth-sessions",
 ]);
 
 const isClerkConfigured = Boolean(
-  process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+  process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 );
 
 // If Clerk isn't configured (local dev / preview), bypass auth entirely.

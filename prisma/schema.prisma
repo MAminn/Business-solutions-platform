@@ -231,6 +231,28 @@ model MetaAppProfile {
   @@index([organizationId])
 }
 
+// Short-lived server-side store for an in-progress Meta OAuth connection.
+// Replaces cookie-based storage: media buyers with many ad accounts can exceed
+// the browser cookie size limit. Only an unguessable session id is stored in
+// the client cookie; the encrypted token + full ad-account list live here.
+// Rows are purged after `expiresAt` (15 min TTL) by a scheduled job.
+model PendingMetaOAuthSession {
+  id               String   @id
+  userId           String
+  organizationId   String
+  clientId         String
+  metaAppProfileId String
+  // Long-lived Meta access token, encrypted with AES-256-GCM (lib/encryption.ts).
+  accessTokenEnc   String
+  tokenExpiresAt   DateTime
+  // Snapshot of the ad accounts the token can access: { id, name, currency, timezone }[].
+  accounts         Json
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 model AdAccountConnection {
   id                  String           @id @default(cuid())
   clientId            String

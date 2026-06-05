@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import {
   META_PENDING_COOKIE,
-  parsePendingSession,
+  loadPendingSession,
+  deletePendingSession,
 } from "@/lib/meta/pending-session";
 import {
   AdAccountSelection,
@@ -27,17 +28,19 @@ async function getOrgIdForUser(userId: string): Promise<string | null> {
 export default async function SelectAdAccountsPage() {
   const user = await requireUser();
 
-  const session = parsePendingSession(
-    cookies().get(META_PENDING_COOKIE)?.value,
-  );
+  const cookieId = cookies().get(META_PENDING_COOKIE)?.value;
+  const session = await loadPendingSession(cookieId, user.id);
   if (!session) {
     redirect("/settings/integrations?error=invalid_state");
   }
 
   // Re-validate access on render (defense in depth — the confirm action
-  // re-checks too).
+  // re-checks too). On terminal validation failures, drop the pending row so a
+  // stale session can't linger; the cookie is cleared by the confirm/cancel
+  // actions or naturally expires.
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(session.clientId)) {
+    await deletePendingSession(cookieId);
     redirect("/settings/integrations?error=forbidden");
   }
 
@@ -65,6 +68,7 @@ export default async function SelectAdAccountsPage() {
   ]);
 
   if (!client || !profile) {
+    await deletePendingSession(cookieId);
     redirect("/settings/integrations?error=invalid_state");
   }
 

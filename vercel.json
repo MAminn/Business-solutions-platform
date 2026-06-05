@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/purge-meta-oauth-sessions",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
