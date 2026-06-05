@@ -9,14 +9,15 @@
  * Each run creates a SyncJob row for observability. Tokens are decrypted
  * just-in-time and never logged.
  *
- * NOTE: Phase 1 implementation. For accounts with > 50 active ads you'll
- * want to switch to async batch reports (POST /act_x/insights → poll).
- * That upgrade is tracked as a TODO inside fetchInsightsForEntities.
+ * Insights are pulled at the ad-account level with a `level` breakdown
+ * (level=campaign and level=ad) and full cursor pagination, rather than one
+ * Graph API call per entity. This avoids Meta rate limit code 17 / 2446079
+ * on large accounts.
  */
 
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { MetaClient, MetaRateLimitError } from "./client";
+import { MetaClient } from "./client";
 import type { MetaCreative } from "./client";
 import {
   SyncJobType,
@@ -409,6 +410,10 @@ export async function syncInsightsBackfill(
 // ============================================================================
 // Shared insights pull
 // ============================================================================
+// Insights are fetched at the AD ACCOUNT level with a `level` breakdown and
+// followed across every page of cursor pagination. This replaces the previous
+// per-campaign / per-adset / per-ad loops, which made one Graph API call per
+// entity and tripped Meta rate limit code 17 / 2446079 on large accounts.
 async function fetchInsightsForEntities(
   ctx: NonNullable<Awaited<ReturnType<typeof getMetaClient>>>,
   connectionId: string,
@@ -418,7 +423,7 @@ async function fetchInsightsForEntities(
   const { meta, platformAccountId } = ctx;
   let records = 0;
 
-  // Account level
+  // ---- Account level (single entity, single call) -------------------------
   const accountInsights = await meta.getInsightsDaily(
     platformAccountId,
     since,
@@ -429,85 +434,69 @@ async function fetchInsightsForEntities(
     records++;
   }
 
-  // Campaigns
+  // ---- Build platformId → local id lookups --------------------------------
   const campaigns = await db.campaign.findMany({
     where: { adAccountConnectionId: connectionId },
     select: { id: true, platformId: true },
   });
+  const campaignByPlatformId = new Map(
+    campaigns.map((c) => [c.platformId, c.id]),
+  );
 
-  // Per-entity fetches are wrapped so a single failing object (e.g. an
-  // entity deleted in Meta between structural and insights sync) does not
-  // abort the entire job. If EVERY fetch fails we surface the error so the
-  // SyncJob is correctly marked FAILED rather than silently succeeding.
-  let perEntityAttempts = 0;
-  let perEntitySuccesses = 0;
-  const skipped: { entityId: string; message: string }[] = [];
-
-  // TODO: For accounts with > 50 active ads switch to async batch reports:
-  //   POST /act_x/insights with level=ad → returns a report_run_id, poll for state.
-  for (const c of campaigns) {
-    perEntityAttempts++;
-    try {
-      const insights = await meta.getInsightsDaily(c.platformId, since, until);
-      for (const ins of insights) {
-        await persistInsight(InsightEntity.CAMPAIGN, c.id, ins);
-        records++;
-      }
-      perEntitySuccesses++;
-    } catch (err) {
-      // A rate limit will affect every subsequent call — stop now and let
-      // runJob mark the job RATE_LIMIT rather than hammering the API.
-      if (err instanceof MetaRateLimitError) throw err;
-      const message = err instanceof Error ? err.message : String(err);
-      if (skipped.length < 10) {
-        skipped.push({ entityId: c.platformId, message });
-      }
-      continue;
-    }
-  }
-
-  if (perEntityAttempts > 0 && perEntitySuccesses === 0 && skipped.length > 0) {
-    const first = skipped[0]!;
-    throw new Error(
-      `All ${perEntityAttempts} insight fetches failed; first error (${first.entityId}): ${first.message}`,
-    );
-  }
-
-  // Ads — ad-level insights power the Creatives analytics. Pulled per ad
-  // with the same resilient skip-and-continue behaviour as campaigns so a
-  // single deleted ad cannot abort the job. (Account/campaign success above
-  // already guards the "everything failed" case, so ad failures only warn.)
   const ads = await db.ad.findMany({
     where: { adSet: { campaign: { adAccountConnectionId: connectionId } } },
     select: { id: true, platformId: true },
   });
+  const adByPlatformId = new Map(ads.map((a) => [a.platformId, a.id]));
 
-  let adInsightRecords = 0;
-  let adsWithInsights = 0;
-  let adsSkipped = 0;
-
-  for (const a of ads) {
-    try {
-      const insights = await meta.getInsightsDaily(a.platformId, since, until);
-      if (insights.length > 0) adsWithInsights++;
-      for (const ins of insights) {
-        await persistInsight(InsightEntity.AD, a.id, ins);
-        records++;
-        adInsightRecords++;
-      }
-    } catch (err) {
-      // On rate limit, stop cleanly — continuing would spam Meta and every
-      // remaining ad would fail anyway. runJob marks the job RATE_LIMIT.
-      if (err instanceof MetaRateLimitError) throw err;
-      // Otherwise skip this ad; account/campaign data is already saved.
-      adsSkipped++;
+  // ---- Campaign-level insights (account-wide, paginated) ------------------
+  // A rate limit (code 17 / 2446079) thrown here is a MetaRateLimitError and
+  // propagates to runJob, which marks the job RATE_LIMIT. We do NOT retry.
+  const campaignRows = await meta.getAccountInsightsByLevel(
+    platformAccountId,
+    "campaign",
+    since,
+    until,
+  );
+  let campaignRowsSkipped = 0;
+  for (const ins of campaignRows) {
+    const localId = ins.campaign_id
+      ? campaignByPlatformId.get(ins.campaign_id)
+      : undefined;
+    // Row for a campaign that no longer exists locally (e.g. deleted/orphaned
+    // in Meta between structural and insights sync) — skip safely.
+    if (!localId) {
+      campaignRowsSkipped++;
       continue;
     }
+    await persistInsight(InsightEntity.CAMPAIGN, localId, ins);
+    records++;
+  }
+
+  // ---- Ad-level insights (account-wide, paginated) ------------------------
+  const adRows = await meta.getAccountInsightsByLevel(
+    platformAccountId,
+    "ad",
+    since,
+    until,
+  );
+  let adRowsPersisted = 0;
+  let adRowsSkipped = 0;
+  for (const ins of adRows) {
+    const localId = ins.ad_id ? adByPlatformId.get(ins.ad_id) : undefined;
+    if (!localId) {
+      adRowsSkipped++;
+      continue;
+    }
+    await persistInsight(InsightEntity.AD, localId, ins);
+    records++;
+    adRowsPersisted++;
   }
 
   console.log(
-    `[meta] ad-level insights: ${adInsightRecords} rows across ` +
-      `${adsWithInsights}/${ads.length} ads (${adsSkipped} skipped)`,
+    `[meta] account-level insights: campaigns ${campaignRows.length} rows ` +
+      `(${campaignRowsSkipped} unmatched), ads ${adRows.length} rows ` +
+      `(${adRowsPersisted} persisted, ${adRowsSkipped} unmatched)`,
   );
 
   return records;

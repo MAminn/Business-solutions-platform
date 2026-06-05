@@ -114,6 +114,12 @@ export interface MetaAd {
 export interface MetaInsight {
   date_start: string;
   date_stop: string;
+  // Present when insights are pulled at the account level with a `level`
+  // breakdown (level=campaign / level=ad). Used to map rows back to local
+  // records via their platformId.
+  campaign_id?: string;
+  adset_id?: string;
+  ad_id?: string;
   impressions?: string;
   reach?: string;
   clicks?: string;
@@ -131,6 +137,11 @@ export interface MetaInsight {
   video_p75_watched_actions?: Array<{ value: string }>;
   video_p100_watched_actions?: Array<{ value: string }>;
 }
+
+// Shared insights field list, used for both per-entity and account-level pulls
+// so the persisted shape stays identical regardless of fetch strategy.
+const INSIGHTS_FIELDS =
+  "impressions,reach,clicks,spend,ctr,cpc,cpm,frequency,actions,action_values,purchase_roas,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions";
 
 export class MetaClient {
   private readonly graphUrl: string;
@@ -151,19 +162,31 @@ export class MetaClient {
     const url = new URL(`${this.graphUrl}${path}`);
     url.searchParams.set("access_token", this.accessToken);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    return this.request<T>(url.toString(), path);
+  }
 
-    console.log(`[meta] GET ${path}`);
+  /**
+   * Fetch an absolute URL (e.g. a Meta `paging.next` cursor link, which
+   * already carries the access token and all query params) while keeping
+   * the same spacing and error handling as `get`.
+   */
+  private async getAbsolute<T>(absoluteUrl: string, label: string): Promise<T> {
+    return this.request<T>(absoluteUrl, label);
+  }
+
+  private async request<T>(fullUrl: string, label: string): Promise<T> {
+    console.log(`[meta] GET ${label}`);
     // Gentle inter-call spacing to remove burst pressure — not a real rate limiter.
     await new Promise<void>((resolve) => setTimeout(resolve, 150));
 
-    const res = await fetch(url.toString(), { cache: "no-store" });
+    const res = await fetch(fullUrl, { cache: "no-store" });
     if (!res.ok) {
       const body = await res.text();
       let parsed: unknown;
       try {
         parsed = JSON.parse(body);
       } catch {
-        throw new MetaApiError(path, res.status, undefined, undefined, body);
+        throw new MetaApiError(label, res.status, undefined, undefined, body);
       }
 
       const envelope = isMetaErrorEnvelope(parsed) ? parsed.error : undefined;
@@ -174,14 +197,14 @@ export class MetaClient {
 
       if (code === 17 || code === 80004 || subcode === 2446079) {
         throw new MetaRateLimitError(
-          path,
+          label,
           code ?? 17,
           subcode,
           userTitle,
           userMsg,
         );
       }
-      throw new MetaApiError(path, res.status, code, subcode, body);
+      throw new MetaApiError(label, res.status, code, subcode, body);
     }
     return res.json() as Promise<T>;
   }
@@ -237,12 +260,62 @@ export class MetaClient {
       {
         time_increment: "1",
         time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
-        fields:
-          "impressions,reach,clicks,spend,ctr,cpc,cpm,frequency,actions,action_values,purchase_roas,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions",
+        fields: INSIGHTS_FIELDS,
         action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
         limit: "500",
       },
     );
     return data.data;
+  }
+
+  /**
+   * Account-level insights with a `level` breakdown (campaign or ad).
+   *
+   * This replaces per-entity insight loops: instead of one Graph API call
+   * per campaign/adset/ad (which trips Meta rate limit code 17 / 2446079 on
+   * large accounts), we make a single paginated call per level for the whole
+   * ad account. Every page of `paging.next` is followed until exhausted.
+   *
+   * Returned rows carry `campaign_id` (level=campaign) or `ad_id`/`adset_id`/
+   * `campaign_id` (level=ad) so callers can map them to local records.
+   */
+  async getAccountInsightsByLevel(
+    adAccountId: string,
+    level: "campaign" | "ad",
+    sinceDate: string,
+    untilDate: string,
+  ): Promise<MetaInsight[]> {
+    const idFields =
+      level === "campaign" ? "campaign_id" : "ad_id,adset_id,campaign_id";
+
+    const rows: MetaInsight[] = [];
+    let page = await this.get<{
+      data: MetaInsight[];
+      paging?: { next?: string };
+    }>(`/${adAccountId}/insights`, {
+      level,
+      time_increment: "1",
+      time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
+      fields: `${idFields},${INSIGHTS_FIELDS}`,
+      action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+      limit: "500",
+    });
+    rows.push(...page.data);
+
+    // Follow Meta's cursor pagination until there is no `next` page. A guard
+    // bounds the loop against a pathological/never-ending cursor.
+    let next = page.paging?.next;
+    let guard = 0;
+    while (next && guard < 1000) {
+      guard++;
+      page = await this.getAbsolute<{
+        data: MetaInsight[];
+        paging?: { next?: string };
+      }>(next, `/${adAccountId}/insights (level=${level} page ${guard + 1})`);
+      rows.push(...page.data);
+      next = page.paging?.next;
+    }
+
+    return rows;
   }
 }
