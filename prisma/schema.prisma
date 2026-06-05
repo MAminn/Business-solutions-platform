@@ -58,6 +58,7 @@ model Organization {
   members  OrganizationMember[]
   clients  Client[]
   auditLogs AuditLog[]
+  metaAppProfiles MetaAppProfile[]
 }
 
 model OrganizationMember {
@@ -209,6 +210,27 @@ enum ConnectionStatus {
   ERROR
 }
 
+// A workspace-owned Meta App. Each organization can register one or more of
+// its own Meta apps (BYO-app). The app secret is encrypted at rest with the
+// same AES-256-GCM helper used for access tokens (lib/encryption.ts).
+model MetaAppProfile {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  appId          String
+  // Encrypted with AES-256-GCM (see lib/encryption.ts). Never returned to the client.
+  appSecretEnc   String
+  apiVersion     String   @default("v23.0")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connections  AdAccountConnection[]
+
+  @@unique([organizationId, appId])
+  @@index([organizationId])
+}
+
 model AdAccountConnection {
   id                  String           @id @default(cuid())
   clientId            String
@@ -224,17 +246,23 @@ model AdAccountConnection {
   status              ConnectionStatus @default(ACTIVE)
   lastSyncedAt        DateTime?
   lastSyncError       String?
+  // Workspace-owned Meta app used to authorize this connection. Nullable so
+  // legacy rows (authorized before BYO-app, or pre-created shells) stay valid;
+  // those fall back to env META_APP_ID/SECRET. Required for all new connections.
+  metaAppProfileId    String?
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
 
-  client     Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  campaigns  Campaign[]
-  creatives  Creative[]
-  syncJobs   SyncJob[]
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  metaAppProfile MetaAppProfile? @relation(fields: [metaAppProfileId], references: [id], onDelete: Restrict)
+  campaigns      Campaign[]
+  creatives      Creative[]
+  syncJobs       SyncJob[]
 
   @@unique([platform, platformAccountId])
   @@index([clientId])
   @@index([status])
+  @@index([metaAppProfileId])
 }
 
 // ============================================================================

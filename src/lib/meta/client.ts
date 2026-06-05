@@ -133,13 +133,22 @@ export interface MetaInsight {
 }
 
 export class MetaClient {
-  constructor(private readonly accessToken: string) {}
+  private readonly graphUrl: string;
+
+  constructor(
+    private readonly accessToken: string,
+    apiVersion?: string,
+  ) {
+    this.graphUrl = apiVersion
+      ? `https://graph.facebook.com/${apiVersion}`
+      : META_GRAPH_URL;
+  }
 
   private async get<T>(
     path: string,
     params: Record<string, string> = {},
   ): Promise<T> {
-    const url = new URL(`${META_GRAPH_URL}${path}`);
+    const url = new URL(`${this.graphUrl}${path}`);
     url.searchParams.set("access_token", this.accessToken);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 

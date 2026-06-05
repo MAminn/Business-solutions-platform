@@ -1,29 +1,33 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { ConnectionStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
-import { writeAudit } from "@/server/audit";
-import { encryptToken } from "@/lib/encryption";
+import { decryptToken } from "@/lib/encryption";
 import {
   verifyState,
-  exchangeCodeForToken,
-  exchangeForLongLivedToken,
+  exchangeCodeForTokenWithProfile,
+  exchangeForLongLivedTokenWithProfile,
+  type MetaAppCredentials,
 } from "@/lib/meta/oauth";
 import { MetaClient } from "@/lib/meta/client";
 import { getPublicBaseUrl } from "@/lib/utils";
+import {
+  META_PENDING_COOKIE,
+  PENDING_COOKIE_MAX_AGE_SEC,
+  serializePendingSession,
+  type PendingAdAccount,
+} from "@/lib/meta/pending-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-async function getOrgIdForUser(userId: string): Promise<string> {
+async function getOrgIdForUser(userId: string): Promise<string | null> {
   const member = await db.organizationMember.findFirst({
     where: { userId },
     orderBy: { createdAt: "asc" },
     select: { organizationId: true },
   });
-  if (!member) throw new Error("User has no organization membership");
-  return member.organizationId;
+  return member?.organizationId ?? null;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -49,8 +53,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // CSRF protection: verify the signed state round-trip.
   const state = verifyState(stateRaw);
-  if (!state) {
+  if (!state || !state.metaAppProfileId) {
     return NextResponse.redirect(
       new URL(
         "/settings/integrations?error=invalid_state",
@@ -78,9 +83,47 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Resolve the workspace-owned app profile, strictly scoped to the org, and
+  // decrypt its secret. New connections never use env credentials.
+  const organizationId = await getOrgIdForUser(user.id);
+  if (!organizationId) {
+    return NextResponse.redirect(
+      new URL("/settings/integrations?error=unknown", getPublicBaseUrl(req)),
+    );
+  }
+
+  const profile = await db.metaAppProfile.findFirst({
+    where: { id: state.metaAppProfileId, organizationId },
+    select: { id: true, appId: true, appSecretEnc: true, apiVersion: true },
+  });
+  if (!profile) {
+    return NextResponse.redirect(
+      new URL(
+        "/settings/integrations?error=profile_required",
+        getPublicBaseUrl(req),
+      ),
+    );
+  }
+
+  let creds: MetaAppCredentials;
+  try {
+    creds = {
+      appId: profile.appId,
+      appSecret: decryptToken(profile.appSecretEnc),
+      apiVersion: profile.apiVersion,
+    };
+  } catch {
+    return NextResponse.redirect(
+      new URL(
+        "/settings/integrations?error=meta_exchange",
+        getPublicBaseUrl(req),
+      ),
+    );
+  }
+
   let shortLivedToken: string;
   try {
-    const r = await exchangeCodeForToken(code);
+    const r = await exchangeCodeForTokenWithProfile(code, creds);
     shortLivedToken = r.access_token;
   } catch {
     return NextResponse.redirect(
@@ -94,7 +137,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let longLivedToken: string;
   let expiresInSec: number | undefined;
   try {
-    const r = await exchangeForLongLivedToken(shortLivedToken);
+    const r = await exchangeForLongLivedTokenWithProfile(
+      shortLivedToken,
+      creds,
+    );
     longLivedToken = r.access_token;
     expiresInSec = r.expires_in;
   } catch {
@@ -106,7 +152,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const meta = new MetaClient(longLivedToken);
+  const meta = new MetaClient(longLivedToken, creds.apiVersion);
   let granted: Awaited<ReturnType<typeof meta.listAdAccounts>>;
   try {
     granted = await meta.listAdAccounts();
@@ -119,67 +165,52 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const grantedIds = Array.from(new Set(granted.map((g) => g.id)));
-  const existing = await db.adAccountConnection.findMany({
-    where: {
-      clientId: state.clientId,
-      platform: "META",
-      platformAccountId: { in: grantedIds },
-    },
-    select: {
-      id: true,
-      platformAccountId: true,
-      accountName: true,
-      clientId: true,
-    },
-  });
-
-  if (existing.length === 0) {
+  if (granted.length === 0) {
     return NextResponse.redirect(
-      new URL("/settings/integrations?warning=no_match", getPublicBaseUrl(req)),
+      new URL(
+        "/settings/integrations?warning=no_accounts",
+        getPublicBaseUrl(req),
+      ),
     );
   }
 
-  const tokenEnc = encryptToken(longLivedToken);
+  const accounts: PendingAdAccount[] = Array.from(
+    new Map(
+      granted.map((g) => [
+        g.id,
+        {
+          id: g.id,
+          name: g.name,
+          currency: g.currency,
+          timezone: g.timezone_name,
+        } satisfies PendingAdAccount,
+      ]),
+    ).values(),
+  );
+
   const expiresAt = expiresInSec
     ? new Date(Date.now() + expiresInSec * 1000)
     : new Date(Date.now() + 60 * 24 * 3600 * 1000);
 
-  const orgId = await getOrgIdForUser(user.id);
+  // Do NOT auto-create connections. Hold the (encrypted) token + account list
+  // in a short-lived signed cookie and redirect to the selection screen.
+  const cookieValue = serializePendingSession({
+    clientId: state.clientId,
+    metaAppProfileId: profile.id,
+    accessToken: longLivedToken,
+    tokenExpiresAt: expiresAt,
+    accounts,
+  });
 
-  for (const conn of existing) {
-    const grant = granted.find((g) => g.id === conn.platformAccountId);
-    await db.adAccountConnection.update({
-      where: { id: conn.id },
-      data: {
-        accessTokenEnc: tokenEnc,
-        tokenExpiresAt: expiresAt,
-        status: ConnectionStatus.ACTIVE,
-        lastSyncError: null,
-        currency: grant?.currency ?? undefined,
-        timezone: grant?.timezone_name ?? undefined,
-      },
-    });
-
-    await writeAudit({
-      userId: user.id,
-      organizationId: orgId,
-      action: "connection.token_set",
-      entityType: "AdAccountConnection",
-      entityId: conn.id,
-      metadata: {
-        clientId: conn.clientId,
-        platformAccountId: conn.platformAccountId,
-        accountName: conn.accountName,
-        tokenExpiresAt: expiresAt.toISOString(),
-      },
-    });
-  }
-
-  return NextResponse.redirect(
-    new URL(
-      `/settings/integrations?connected=${existing.length}`,
-      getPublicBaseUrl(req),
-    ),
+  const res = NextResponse.redirect(
+    new URL("/settings/integrations/select", getPublicBaseUrl(req)),
   );
+  res.cookies.set(META_PENDING_COOKIE, cookieValue, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: PENDING_COOKIE_MAX_AGE_SEC,
+  });
+  return res;
 }

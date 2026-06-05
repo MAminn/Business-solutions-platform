@@ -89,14 +89,21 @@ async function getMetaClient(connectionId: string): Promise<{
 } | null> {
   const conn = await db.adAccountConnection.findUnique({
     where: { id: connectionId },
+    include: { metaAppProfile: { select: { apiVersion: true } } },
   });
   if (!conn) return null;
   if (conn.status !== ConnectionStatus.ACTIVE) return null;
   if (!conn.accessTokenEnc) return null;
 
   const token = decryptToken(conn.accessTokenEnc);
+  // Use the connection's profile API version. Legacy connections without a
+  // profile fall back to the env-configured version (handled by MetaClient).
+  const apiVersion =
+    conn.metaAppProfile?.apiVersion ??
+    process.env.META_API_VERSION ??
+    undefined;
   return {
-    meta: new MetaClient(token),
+    meta: new MetaClient(token, apiVersion),
     platformAccountId: conn.platformAccountId,
     connectionId: conn.id,
   };

@@ -16,6 +16,12 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ConnectMetaButton } from "@/components/integrations/connect-meta-button";
 import { DisconnectButton } from "@/components/integrations/disconnect-button";
 import { SyncNowButton } from "@/components/integrations/sync-now-button";
+import { MetaAppProfiles } from "@/components/integrations/meta-app-profiles";
+import { ConnectClientLauncher } from "@/components/integrations/connect-client-launcher";
+import {
+  listMetaAppProfiles,
+  getMetaOAuthRedirectUri,
+} from "@/server/meta-app-profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +39,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   forbidden: "You do not have access to that client.",
   not_configured:
     "Meta App credentials are not configured. Set META_APP_ID and META_APP_SECRET in your .env.",
+  profile_required:
+    "Select a Meta App Profile before connecting. Add one below if you have none.",
   unknown: "Something went wrong. Please try again.",
 };
 
@@ -64,27 +72,44 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
   const user = await requireUser();
   const accessible = await getAccessibleClientIds(user);
 
-  const connections = await db.adAccountConnection.findMany({
-    where: {
-      clientId: { in: accessible },
-      platform: "META",
-    },
-    select: {
-      id: true,
-      clientId: true,
-      platformAccountId: true,
-      accountName: true,
-      currency: true,
-      timezone: true,
-      status: true,
-      lastSyncedAt: true,
-      lastSyncError: true,
-      accessTokenEnc: true,
-      client: { select: { id: true, name: true } },
-      _count: { select: { campaigns: true } },
-    },
-    orderBy: [{ client: { name: "asc" } }, { createdAt: "asc" }],
-  });
+  const [connections, profiles, redirectUri, clients] = await Promise.all([
+    db.adAccountConnection.findMany({
+      where: {
+        clientId: { in: accessible },
+        platform: "META",
+      },
+      select: {
+        id: true,
+        clientId: true,
+        platformAccountId: true,
+        accountName: true,
+        currency: true,
+        timezone: true,
+        status: true,
+        lastSyncedAt: true,
+        lastSyncError: true,
+        accessTokenEnc: true,
+        metaAppProfileId: true,
+        metaAppProfile: { select: { name: true } },
+        client: { select: { id: true, name: true } },
+        _count: { select: { campaigns: true } },
+      },
+      orderBy: [{ client: { name: "asc" } }, { createdAt: "asc" }],
+    }),
+    listMetaAppProfiles(),
+    getMetaOAuthRedirectUri(),
+    db.client.findMany({
+      where: { id: { in: accessible } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
+
+  const connectProfiles = profiles.map((p) => ({
+    id: p.id,
+    name: p.name,
+    apiVersion: p.apiVersion,
+  }));
 
   const rows = connections.map((c) => ({
     id: c.id,
@@ -99,6 +124,8 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
     lastSyncError: c.lastSyncError,
     campaignCount: c._count.campaigns,
     hasToken: Boolean(c.accessTokenEnc),
+    profileName: c.metaAppProfile?.name ?? null,
+    usesEnvFallback: c.metaAppProfileId === null,
   }));
 
   const banner = (() => {
@@ -127,6 +154,21 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
         </Card>
       );
     }
+    if (searchParams.warning === "no_accounts") {
+      return (
+        <Card className='border-amber-500/30 bg-warning/10 p-4 text-sm text-amber-300'>
+          The authorization returned no ad accounts. Make sure the Meta user has
+          access to at least one ad account, then try again.
+        </Card>
+      );
+    }
+    if (searchParams.warning === "cancelled") {
+      return (
+        <Card className='border-border/60 bg-muted/40 p-4 text-sm text-muted-foreground'>
+          Connection cancelled. No ad accounts were linked.
+        </Card>
+      );
+    }
     return null;
   })();
 
@@ -141,6 +183,10 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
 
       {banner}
 
+      <div id='meta-app-profiles'>
+        <MetaAppProfiles profiles={profiles} redirectUri={redirectUri} />
+      </div>
+
       <div className='space-y-3'>
         <div className='flex items-center gap-2'>
           <h2 className='text-xl font-semibold tracking-tight'>Meta Ads</h2>
@@ -151,6 +197,11 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
           request write access.
         </p>
       </div>
+
+      <ConnectClientLauncher
+        clients={clients}
+        profiles={connectProfiles.map((p) => ({ id: p.id, name: p.name }))}
+      />
 
       {rows.length === 0 ? (
         <EmptyState
@@ -165,6 +216,7 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
                 <TableHead>Client</TableHead>
                 <TableHead>Account name</TableHead>
                 <TableHead>Account ID</TableHead>
+                <TableHead>App profile</TableHead>
                 <TableHead>Currency</TableHead>
                 <TableHead>Timezone</TableHead>
                 <TableHead>Campaigns</TableHead>
@@ -196,6 +248,15 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
                         {r.platformAccountId}
                       </span>
                     </TableCell>
+                    <TableCell>
+                      {r.profileName ? (
+                        <span className='text-xs'>{r.profileName}</span>
+                      ) : r.usesEnvFallback ? (
+                        <Badge variant='muted'>Env (legacy)</Badge>
+                      ) : (
+                        <span className='text-xs text-muted-foreground'>—</span>
+                      )}
+                    </TableCell>
                     <TableCell>{r.currency}</TableCell>
                     <TableCell className='text-muted-foreground'>
                       {r.timezone}
@@ -224,7 +285,10 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
                           <DisconnectButton connectionId={r.id} />
                         </div>
                       ) : (
-                        <ConnectMetaButton clientId={r.clientId} />
+                        <ConnectMetaButton
+                          clientId={r.clientId}
+                          profiles={connectProfiles}
+                        />
                       )}
                     </TableCell>
                   </TableRow>

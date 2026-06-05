@@ -29,6 +29,37 @@ export interface OAuthState {
   clientId: string;
   nonce: string;
   issuedAt: number;
+  // Workspace-owned Meta App used for this authorization. Optional in the type
+  // for backward compatibility with any in-flight legacy state, but always set
+  // by the current start route.
+  metaAppProfileId?: string;
+}
+
+/**
+ * Credentials for a workspace-owned Meta App profile. Used to drive the
+ * authorize URL and token exchanges with the org's own app instead of the
+ * shared env app.
+ */
+export interface MetaAppCredentials {
+  appId: string;
+  appSecret: string;
+  apiVersion: string;
+}
+
+function graphUrlFor(apiVersion: string): string {
+  return `https://graph.facebook.com/${apiVersion}`;
+}
+
+function oauthDialogUrlFor(apiVersion: string): string {
+  return `https://www.facebook.com/${apiVersion}/dialog/oauth`;
+}
+
+/**
+ * The OAuth redirect URI users must whitelist in their Meta App. This is the
+ * same callback for every workspace app; each org adds it to their own app.
+ */
+export function getOAuthRedirectUri(): string {
+  return process.env.META_OAUTH_REDIRECT_URL ?? "";
 }
 
 /**
@@ -117,6 +148,66 @@ export async function exchangeForLongLivedToken(shortToken: string): Promise<{
   });
   const res = await fetch(
     `${META_GRAPH_URL}/oauth/access_token?${params.toString()}`,
+  );
+  if (!res.ok)
+    throw new Error(
+      `Meta long-lived token exchange failed: ${res.status} ${await res.text()}`,
+    );
+  return res.json();
+}
+
+// ============================================================================
+// Profile-aware variants (BYO-app). New connections always use these with the
+// selected MetaAppProfile's credentials; env values are never used here.
+// ============================================================================
+
+export function buildAuthorizeUrlWithProfile(args: {
+  appId: string;
+  apiVersion: string;
+  state: string;
+}): string {
+  const params = new URLSearchParams({
+    client_id: args.appId,
+    redirect_uri: getOAuthRedirectUri(),
+    state: args.state,
+    scope: META_SCOPES.join(","),
+    response_type: "code",
+  });
+  return `${oauthDialogUrlFor(args.apiVersion)}?${params.toString()}`;
+}
+
+export async function exchangeCodeForTokenWithProfile(
+  code: string,
+  creds: MetaAppCredentials,
+): Promise<{ access_token: string; token_type: string; expires_in?: number }> {
+  const params = new URLSearchParams({
+    client_id: creds.appId,
+    client_secret: creds.appSecret,
+    redirect_uri: getOAuthRedirectUri(),
+    code,
+  });
+  const res = await fetch(
+    `${graphUrlFor(creds.apiVersion)}/oauth/access_token?${params.toString()}`,
+  );
+  if (!res.ok)
+    throw new Error(
+      `Meta token exchange failed: ${res.status} ${await res.text()}`,
+    );
+  return res.json();
+}
+
+export async function exchangeForLongLivedTokenWithProfile(
+  shortToken: string,
+  creds: MetaAppCredentials,
+): Promise<{ access_token: string; token_type: string; expires_in?: number }> {
+  const params = new URLSearchParams({
+    grant_type: "fb_exchange_token",
+    client_id: creds.appId,
+    client_secret: creds.appSecret,
+    fb_exchange_token: shortToken,
+  });
+  const res = await fetch(
+    `${graphUrlFor(creds.apiVersion)}/oauth/access_token?${params.toString()}`,
   );
   if (!res.ok)
     throw new Error(
