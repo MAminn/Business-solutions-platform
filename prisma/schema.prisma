@@ -266,7 +266,15 @@ model AdAccountConnection {
   refreshTokenEnc     String?
   tokenExpiresAt      DateTime?
   status              ConnectionStatus @default(ACTIVE)
+  // Legacy "any successful sync" timestamp. Kept for backward compatibility:
+  // still updated after every successful job. Do NOT use it to decide
+  // initial-vs-incremental — use insightsBackfilledAt instead.
   lastSyncedAt        DateTime?
+  // Set only when a STRUCTURAL job succeeds.
+  structuralSyncedAt  DateTime?
+  // Set only when an INSIGHTS_BACKFILL job succeeds. Null until a full
+  // backfill has completed; this is the signal for initial-vs-incremental.
+  insightsBackfilledAt DateTime?
   lastSyncError       String?
   // Workspace-owned Meta app used to authorize this connection. Nullable so
   // legacy rows (authorized before BYO-app, or pre-created shells) stay valid;

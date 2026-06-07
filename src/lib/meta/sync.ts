@@ -134,9 +134,22 @@ async function runJob<T>(
         completedAt: new Date(),
       },
     });
+    // Keep updating lastSyncedAt after any successful job for backward
+    // compatibility, and additionally stamp the type-specific timestamp.
+    // The mode decision keys off insightsBackfilledAt (set only here on a
+    // successful INSIGHTS_BACKFILL), so a successful structural sync can never
+    // cause a later sync to skip the full insights backfill.
+    const now = new Date();
     await db.adAccountConnection.update({
       where: { id: connectionId },
-      data: { lastSyncedAt: new Date(), lastSyncError: null },
+      data: {
+        lastSyncedAt: now,
+        lastSyncError: null,
+        ...(type === SyncJobType.STRUCTURAL ? { structuralSyncedAt: now } : {}),
+        ...(type === SyncJobType.INSIGHTS_BACKFILL
+          ? { insightsBackfilledAt: now }
+          : {}),
+      },
     });
     return result;
   } catch (err) {

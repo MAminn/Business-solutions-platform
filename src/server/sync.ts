@@ -41,7 +41,7 @@ export async function syncConnectionNow(input: {
       platformAccountId: true,
       accountName: true,
       accessTokenEnc: true,
-      lastSyncedAt: true,
+      insightsBackfilledAt: true,
     },
   });
   if (!conn) return { ok: false, error: "Connection not found" };
@@ -58,8 +58,11 @@ export async function syncConnectionNow(input: {
     };
   }
 
+  // Key the decision off insightsBackfilledAt, NOT lastSyncedAt: a connection
+  // whose backfill never succeeded must keep attempting the backfill on the
+  // next Sync Now, even if structural already succeeded.
   const mode: "initial" | "incremental" =
-    conn.lastSyncedAt === null ? "initial" : "incremental";
+    conn.insightsBackfilledAt === null ? "initial" : "incremental";
 
   try {
     await syncStructural(connectionId);
