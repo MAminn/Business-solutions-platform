@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
+import { GenerateDigestButton } from "@/components/integrations/generate-digest-button";
 
 interface PageProps {
   params: { id: string };
@@ -167,6 +168,10 @@ export default async function AdAccountPage({ params }: PageProps) {
                         Manage in integrations
                       </Link>
                     </Button>
+                  </div>
+
+                  <div className='border-t border-border/60 pt-3'>
+                    <GenerateDigestButton connectionId={conn.id} />
                   </div>
                 </CardContent>
               </Card>
