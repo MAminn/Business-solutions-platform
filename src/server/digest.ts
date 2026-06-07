@@ -4,6 +4,7 @@ import { subDays, format } from "date-fns";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { InsightEntity } from "@prisma/client";
+import type { ConnectionStatus } from "@prisma/client";
 
 // ============================================================================
 // Per-account Markdown digest builder.
@@ -149,6 +150,78 @@ function roas(a: CoreAgg): number {
 }
 
 // ---------------------------------------------------------------------------
+// Header block (account identity + sync-health staleness warnings)
+// ---------------------------------------------------------------------------
+
+interface HeaderConn {
+  accountName: string;
+  platformAccountId: string;
+  currency: string;
+  timezone: string;
+  structuralSyncedAt: Date | null;
+  insightsBackfilledAt: Date | null;
+  lastSyncedAt: Date | null;
+  status: ConnectionStatus;
+  lastSyncError: string | null;
+  tokenExpiresAt: Date | null;
+  client: { name: string };
+}
+
+/**
+ * Pushes the shared "## Account" header block. Includes the three sync
+ * timestamps plus sync-health staleness warnings (connection status, last
+ * sync error, token expiry). These warnings never block generation — they
+ * only annotate that the historical rows may be stale.
+ */
+function pushHeaderBlock(lines: string[], conn: HeaderConn): void {
+  lines.push("## Account");
+  lines.push("");
+  lines.push(`- **Client:** ${conn.client.name}`);
+  lines.push(`- **Account:** ${conn.accountName} (${conn.platformAccountId})`);
+  lines.push(`- **Currency:** ${conn.currency}`);
+  lines.push(`- **Timezone:** ${conn.timezone}`);
+  lines.push(`- **Structural synced:** ${fmtDate(conn.structuralSyncedAt)}`);
+  lines.push(
+    `- **Insights backfilled:** ${fmtDate(conn.insightsBackfilledAt)}`,
+  );
+  lines.push(`- **Last synced:** ${fmtDate(conn.lastSyncedAt)}`);
+
+  // Sync-health staleness warnings (non-blocking).
+  if (conn.status !== "ACTIVE") {
+    lines.push(
+      `- **Connection status:** ${conn.status} — future syncs may fail, ` +
+        `so this data could be stale.`,
+    );
+  } else {
+    lines.push(`- **Connection status:** ${conn.status}`);
+  }
+
+  if (conn.lastSyncError !== null) {
+    lines.push(
+      `- **Last sync error:** ${escapeInline(conn.lastSyncError)} — the most ` +
+        `recent sync attempt errored, so data may not be current.`,
+    );
+  }
+
+  if (conn.tokenExpiresAt !== null) {
+    const sevenDaysOut = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    if (conn.tokenExpiresAt <= sevenDaysOut) {
+      const expired = conn.tokenExpiresAt.getTime() <= Date.now();
+      lines.push(
+        `- **Meta token:** ${expired ? "expired" : "expiring"} ` +
+          `(${fmtDate(conn.tokenExpiresAt)}) — data may stop updating ` +
+          `until the connection is re-authorized.`,
+      );
+    }
+  }
+}
+
+/** Collapse newlines so a stored error cannot break the Markdown list item. */
+function escapeInline(value: string): string {
+  return value.replace(/\r?\n/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
@@ -169,6 +242,9 @@ export async function buildAccountDigest(
       structuralSyncedAt: true,
       insightsBackfilledAt: true,
       lastSyncedAt: true,
+      status: true,
+      lastSyncError: true,
+      tokenExpiresAt: true,
       client: { select: { name: true } },
     },
   });
@@ -178,6 +254,13 @@ export async function buildAccountDigest(
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(conn.clientId)) {
     throw new Error("Forbidden");
+  }
+
+  // Hard block: trust data only after a successful 30-day insights backfill
+  // (PASS). When insightsBackfilledAt is null we render the header for context
+  // but no metric/campaign/ad tables — partial data must not look complete.
+  if (conn.insightsBackfilledAt === null) {
+    return renderBackfillUnavailable(conn);
   }
 
   const currency = conn.currency;
@@ -401,32 +484,13 @@ export async function buildAccountDigest(
   lines.push(`# Account digest — ${conn.client.name}`);
   lines.push("");
 
-  // Data-state guard at the very top.
-  if (conn.insightsBackfilledAt === null) {
-    lines.push(
-      "> ⚠️ **Insights are NOT backfilled** (`insightsBackfilledAt` is null). " +
-        "This digest may be incomplete — recent days only. Run an initial " +
-        "30-day sync before treating these numbers as complete.",
-    );
-    lines.push("");
-  }
   lines.push(
     "> Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.",
   );
   lines.push("");
 
-  // Header block.
-  lines.push("## Account");
-  lines.push("");
-  lines.push(`- **Client:** ${conn.client.name}`);
-  lines.push(`- **Account:** ${conn.accountName} (${conn.platformAccountId})`);
-  lines.push(`- **Currency:** ${currency}`);
-  lines.push(`- **Timezone:** ${conn.timezone}`);
-  lines.push(`- **Structural synced:** ${fmtDate(conn.structuralSyncedAt)}`);
-  lines.push(
-    `- **Insights backfilled:** ${fmtDate(conn.insightsBackfilledAt)}`,
-  );
-  lines.push(`- **Last synced:** ${fmtDate(conn.lastSyncedAt)}`);
+  // Header block (shared) + the data-range line specific to a rendered digest.
+  pushHeaderBlock(lines, conn);
   lines.push(
     `- **Data range present:** ${fmtDay(minDate)} → ${fmtDay(maxDate)} ` +
       `(${distinctDays} distinct day${distinctDays === 1 ? "" : "s"})`,
@@ -744,47 +808,48 @@ function escapeCell(value: string): string {
 // Empty render
 // ---------------------------------------------------------------------------
 
-function renderEmpty(
-  conn: {
-    accountName: string;
-    platformAccountId: string;
-    currency: string;
-    timezone: string;
-    structuralSyncedAt: Date | null;
-    insightsBackfilledAt: Date | null;
-    lastSyncedAt: Date | null;
-    client: { name: string };
-  },
-  currency: string,
-): string {
+function renderEmpty(conn: HeaderConn, currency: string): string {
+  void currency; // currency is part of the shared header block.
   const lines: string[] = [];
   lines.push(`# Account digest — ${conn.client.name}`);
   lines.push("");
-  if (conn.insightsBackfilledAt === null) {
-    lines.push(
-      "> ⚠️ **Insights are NOT backfilled** (`insightsBackfilledAt` is null).",
-    );
-    lines.push("");
-  }
   lines.push(
     "> Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.",
   );
   lines.push("");
-  lines.push("## Account");
-  lines.push("");
-  lines.push(`- **Client:** ${conn.client.name}`);
-  lines.push(`- **Account:** ${conn.accountName} (${conn.platformAccountId})`);
-  lines.push(`- **Currency:** ${currency}`);
-  lines.push(`- **Timezone:** ${conn.timezone}`);
-  lines.push(`- **Structural synced:** ${fmtDate(conn.structuralSyncedAt)}`);
-  lines.push(
-    `- **Insights backfilled:** ${fmtDate(conn.insightsBackfilledAt)}`,
-  );
-  lines.push(`- **Last synced:** ${fmtDate(conn.lastSyncedAt)}`);
+  pushHeaderBlock(lines, conn);
   lines.push("");
   lines.push(
     "**No insights data is present for this connection in the last 30 days.** " +
       "Run a sync to populate performance data before generating a digest.",
   );
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Backfill-unavailable render (hard block — item 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returned when insightsBackfilledAt is null: no 30-day backfill has
+ * completed (no PASS), so the digest is unavailable. Renders the header for
+ * context but deliberately omits every metric / campaign / ad table.
+ */
+function renderBackfillUnavailable(conn: HeaderConn): string {
+  const lines: string[] = [];
+  lines.push(`# Account digest — ${conn.client.name}`);
+  lines.push("");
+  lines.push(
+    "> ⚠️ **Digest unavailable — insights backfill not complete.** " +
+      "This account has not finished a 30-day insights backfill " +
+      "(`insightsBackfilledAt` is null), so the data cannot be trusted yet. " +
+      "Run an initial sync first, then regenerate.",
+  );
+  lines.push("");
+  lines.push(
+    "> Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.",
+  );
+  lines.push("");
+  pushHeaderBlock(lines, conn);
   return lines.join("\n");
 }
