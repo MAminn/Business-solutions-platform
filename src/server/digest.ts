@@ -611,11 +611,20 @@ export async function buildAccountDigest(
       const cpaDiv = pctChange(cpaCurr, cpaPrev);
       const cpmDiv = pctChange(cpmCurr, cpmPrev);
       const flags: string[] = [];
+      // Direction-aware: for CPA/CPM, an INCREASE beyond threshold is a
+      // worsening (⚠️); a DECREASE beyond threshold is an improvement (✅).
+      // No baseline (pctChange === null) emits no flag.
       if (cpaDiv !== null && Math.abs(cpaDiv) > 25) {
-        flags.push(`CPA ${cpaDiv > 0 ? "+" : ""}${cpaDiv.toFixed(0)}%`);
+        const marker = cpaDiv > 0 ? "⚠️" : "✅";
+        flags.push(
+          `${marker} CPA ${cpaDiv > 0 ? "+" : ""}${cpaDiv.toFixed(0)}%`,
+        );
       }
       if (cpmDiv !== null && Math.abs(cpmDiv) > 25) {
-        flags.push(`CPM ${cpmDiv > 0 ? "+" : ""}${cpmDiv.toFixed(0)}%`);
+        const marker = cpmDiv > 0 ? "⚠️" : "✅";
+        flags.push(
+          `${marker} CPM ${cpmDiv > 0 ? "+" : ""}${cpmDiv.toFixed(0)}%`,
+        );
       }
       const name = campaignName.get(c.id) ?? c.id;
       lines.push(
@@ -625,7 +634,7 @@ export async function buildAccountDigest(
         )} | ${deltaLabel(c.agg.spend, prev.spend)} | ${money(
           cpaCurr,
           currency,
-        )} | ${mult(roas(c.agg))} | ${flags.length ? "⚠️ " + flags.join(", ") : ""} |`,
+        )} | ${mult(roas(c.agg))} | ${flags.join(", ")} |`,
       );
     }
     lines.push("");
