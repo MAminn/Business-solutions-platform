@@ -83,7 +83,7 @@ async function upsertCreative(
   return row.id;
 }
 
-async function getMetaClient(connectionId: string): Promise<{
+export async function getMetaClient(connectionId: string): Promise<{
   meta: MetaClient;
   platformAccountId: string;
   connectionId: string;
