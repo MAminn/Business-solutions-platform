@@ -170,8 +170,15 @@ export default async function AdAccountPage({ params }: PageProps) {
                     </Button>
                   </div>
 
-                  <div className='border-t border-border/60 pt-3'>
+                  <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-3'>
                     <GenerateDigestButton connectionId={conn.id} />
+                    <Button asChild size='sm' variant='outline'>
+                      <a
+                        href={`/api/connections/${conn.id}/creative-bundle`}
+                        download>
+                        Download creative bundle
+                      </a>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
