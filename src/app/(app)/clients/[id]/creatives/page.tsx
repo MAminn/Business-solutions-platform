@@ -6,6 +6,8 @@ import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import {
@@ -49,6 +51,13 @@ function parseType(raw: string | undefined): TypeFilter {
 function parseStatus(raw: string | undefined): StatusFilter {
   if (raw === "ACTIVE" || raw === "PAUSED") return raw;
   return "ALL";
+}
+
+// Best-effort deep link into Meta Ads Manager for reviewing an ad's creative
+// in its native environment. Not an API call — just a shortcut URL.
+function buildMetaAdReviewUrl(accountId: string, adId: string): string {
+  const numericAccountId = accountId.replace(/^act_/, "");
+  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${encodeURIComponent(numericAccountId)}&selected_ad_ids=${encodeURIComponent(adId)}`;
 }
 
 const TYPE_VARIANT: Record<CreativeType, "info" | "warning" | "muted"> = {
@@ -104,6 +113,7 @@ interface CreativePerf {
   cpa: number;
   roas: number;
   hasData: boolean;
+  reviewUrl: string | null;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -181,9 +191,12 @@ export default async function ClientCreativesPage({
 
   const connections = await db.adAccountConnection.findMany({
     where: { clientId: client.id },
-    select: { id: true },
+    select: { id: true, platformAccountId: true },
   });
   const connectionIds = connections.map((c) => c.id);
+  const accountIdByConnection = new Map(
+    connections.map((c) => [c.id, c.platformAccountId]),
+  );
 
   const creatives = await db.creative.findMany({
     where: { adAccountConnectionId: { in: connectionIds } },
@@ -195,10 +208,12 @@ export default async function ClientCreativesPage({
       thumbnailUrl: true,
       imageUrl: true,
       headline: true,
+      adAccountConnectionId: true,
       ads: {
         select: {
           id: true,
           name: true,
+          platformId: true,
           effectiveStatus: true,
           adSet: { select: { campaign: { select: { name: true } } } },
         },
@@ -283,6 +298,16 @@ export default async function ClientCreativesPage({
       freqCount += agg.freqCount;
     }
     const frequency = freqCount > 0 ? freqSum / freqCount : 0;
+    // Prefer a linked ad with spend in the 30-day window; else the first ad.
+    const reviewAd =
+      cr.ads.find(
+        (ad) => ad.platformId && (insightsByAd.get(ad.id)?.spend ?? 0) > 0,
+      ) ?? cr.ads[0];
+    const accountId = accountIdByConnection.get(cr.adAccountConnectionId);
+    const reviewUrl =
+      reviewAd?.platformId && accountId
+        ? buildMetaAdReviewUrl(accountId, reviewAd.platformId)
+        : null;
     return {
       id: cr.id,
       name: cr.name,
@@ -305,6 +330,7 @@ export default async function ClientCreativesPage({
       cpa: conversions > 0 ? spend / conversions : 0,
       roas: spend > 0 ? conversionValue / spend : 0,
       hasData: impressions > 0 || spend > 0,
+      reviewUrl,
     };
   });
 
@@ -615,6 +641,19 @@ export default async function ClientCreativesPage({
                       <p className='mt-3 border-t border-border/40 pt-3 text-[11px] text-muted-foreground'>
                         No performance data yet.
                       </p>
+                    )}
+
+                    {cr.reviewUrl && (
+                      <a
+                        href={cr.reviewUrl}
+                        target='_blank'
+                        rel='noreferrer'
+                        className={cn(
+                          buttonVariants({ variant: "outline", size: "sm" }),
+                          "mt-3 w-full",
+                        )}>
+                        Review in Meta
+                      </a>
                     )}
                   </Card>
                 );
