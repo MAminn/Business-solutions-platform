@@ -570,6 +570,23 @@ function finiteOrNull(n: number): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Formats a number as a fixed-decimal string for a Postgres numeric column,
+ * or null when the value is nullish, non-finite, or would overflow the
+ * column's precision (abs(value) >= maxAbsExclusive). Out-of-range values are
+ * dropped rather than clamped — the original is still preserved in `raw`.
+ */
+function decimalOrNull(
+  value: number | null | undefined,
+  decimals: number,
+  maxAbsExclusive: number,
+): string | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value)) return null;
+  if (Math.abs(value) >= maxAbsExclusive) return null;
+  return value.toFixed(decimals);
+}
+
 async function persistInsight(
   entityType: InsightEntity,
   entityId: string,
@@ -621,7 +638,7 @@ async function persistInsight(
       conversionValue: purchaseValue
         ? actionTotal(purchaseValue).toFixed(2)
         : "0",
-      roas: purchaseRoas !== null ? purchaseRoas.toFixed(4) : null,
+      roas: decimalOrNull(purchaseRoas, 4, 10000),
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
       videoViews3s,
       videoViewsP25: finiteOrNull(
@@ -651,7 +668,7 @@ async function persistInsight(
       conversionValue: purchaseValue
         ? actionTotal(purchaseValue).toFixed(2)
         : "0",
-      roas: purchaseRoas !== null ? purchaseRoas.toFixed(4) : null,
+      roas: decimalOrNull(purchaseRoas, 4, 10000),
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
       raw: ins as unknown as object,
     },
