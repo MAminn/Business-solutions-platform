@@ -571,20 +571,26 @@ function finiteOrNull(n: number): number | null {
 }
 
 /**
- * Formats a number as a fixed-decimal string for a Postgres numeric column,
+ * Formats a value as a fixed-decimal string for a Postgres numeric column,
  * or null when the value is nullish, non-finite, or would overflow the
- * column's precision (abs(value) >= maxAbsExclusive). Out-of-range values are
- * dropped rather than clamped — the original is still preserved in `raw`.
+ * column's precision (abs >= maxAbsExclusive). The overflow check is applied
+ * to the ROUNDED value, since e.g. 99.99996.toFixed(4) === "100.0000" would
+ * still overflow Decimal(6,4). Out-of-range values are dropped rather than
+ * clamped — the original is still preserved in `raw`.
  */
 function decimalOrNull(
-  value: number | null | undefined,
+  value: number | string | null | undefined,
   decimals: number,
   maxAbsExclusive: number,
 ): string | null {
   if (value === null || value === undefined) return null;
-  if (!Number.isFinite(value)) return null;
-  if (Math.abs(value) >= maxAbsExclusive) return null;
-  return value.toFixed(decimals);
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  const fixed = n.toFixed(decimals);
+  const rounded = Number(fixed);
+  if (!Number.isFinite(rounded)) return null;
+  if (Math.abs(rounded) >= maxAbsExclusive) return null;
+  return fixed;
 }
 
 async function persistInsight(
@@ -629,17 +635,18 @@ async function persistInsight(
       reach: ins.reach ? Number(ins.reach) : 0,
       clicks: ins.clicks ? Number(ins.clicks) : 0,
       spend: spend.toFixed(2),
-      ctr: ins.ctr ? Number(ins.ctr).toFixed(4) : null,
-      cpc: ins.cpc ? Number(ins.cpc).toFixed(4) : null,
-      cpm: ins.cpm ? Number(ins.cpm).toFixed(2) : null,
-      frequency: ins.frequency ? Number(ins.frequency).toFixed(2) : null,
+      ctr: decimalOrNull(ins.ctr, 4, 100),
+      cpc: decimalOrNull(ins.cpc, 4, 1000000),
+      cpm: decimalOrNull(ins.cpm, 2, 100000000),
+      frequency: decimalOrNull(ins.frequency, 2, 10000),
       conversions: purchases,
       purchases,
       conversionValue: purchaseValue
         ? actionTotal(purchaseValue).toFixed(2)
         : "0",
       roas: decimalOrNull(purchaseRoas, 4, 10000),
-      cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
+      cpa:
+        purchases > 0 ? decimalOrNull(spend / purchases, 2, 100000000) : null,
       videoViews3s,
       videoViewsP25: finiteOrNull(
         Number(ins.video_p25_watched_actions?.[0]?.value),
@@ -655,7 +662,7 @@ async function persistInsight(
       ),
       hookRate:
         videoViews3s !== null && impressions > 0
-          ? (videoViews3s / impressions).toFixed(4)
+          ? decimalOrNull(videoViews3s / impressions, 4, 100)
           : null,
       raw: ins as unknown as object,
     },
@@ -669,7 +676,8 @@ async function persistInsight(
         ? actionTotal(purchaseValue).toFixed(2)
         : "0",
       roas: decimalOrNull(purchaseRoas, 4, 10000),
-      cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
+      cpa:
+        purchases > 0 ? decimalOrNull(spend / purchases, 2, 100000000) : null,
       raw: ins as unknown as object,
     },
   });
