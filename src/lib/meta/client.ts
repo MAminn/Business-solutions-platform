@@ -135,14 +135,53 @@ export interface MetaInsight {
   cpc?: string;
   cpm?: string;
   frequency?: string;
-  actions?: Array<{ action_type: string; value: string }>;
-  action_values?: Array<{ action_type: string; value: string }>;
-  purchase_roas?: Array<{ action_type: string; value: string }>;
-  video_play_actions?: Array<{ action_type: string; value: string }>;
-  video_p25_watched_actions?: Array<{ value: string }>;
-  video_p50_watched_actions?: Array<{ value: string }>;
-  video_p75_watched_actions?: Array<{ value: string }>;
-  video_p100_watched_actions?: Array<{ value: string }>;
+  // Note: when conversions are entirely view/click-window attributed (common
+  // on new accounts), Meta omits the top-level `value` and only returns the
+  // attribution-window fields (`7d_click` / `1d_view`).
+  actions?: Array<{
+    action_type: string;
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  action_values?: Array<{
+    action_type: string;
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  purchase_roas?: Array<{
+    action_type: string;
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  video_play_actions?: Array<{
+    action_type: string;
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  video_p25_watched_actions?: Array<{
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  video_p50_watched_actions?: Array<{
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  video_p75_watched_actions?: Array<{
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
+  video_p100_watched_actions?: Array<{
+    value?: string;
+    "1d_view"?: string;
+    "7d_click"?: string;
+  }>;
 }
 
 // Shared insights field list, used for both per-entity and account-level pulls

@@ -538,6 +538,38 @@ async function fetchInsightsForEntities(
   return records;
 }
 
+/**
+ * Total for a Meta action stat. Uses the top-level `value` when it parses to
+ * a finite number; otherwise falls back to summing the attribution-window
+ * fields (`7d_click` + `1d_view`), which is all Meta returns when conversions
+ * are entirely window-attributed (common on new accounts). Never returns NaN.
+ */
+function actionTotal(
+  action:
+    | { value?: string; "7d_click"?: string; "1d_view"?: string }
+    | null
+    | undefined,
+): number {
+  if (!action) return 0;
+  const direct = Number(action.value);
+  if (Number.isFinite(direct)) return direct;
+  let sum = 0;
+  let found = false;
+  for (const v of [action["7d_click"], action["1d_view"]]) {
+    const n = Number(v);
+    if (Number.isFinite(n)) {
+      sum += n;
+      found = true;
+    }
+  }
+  return found ? sum : 0;
+}
+
+/** Returns the number if finite, otherwise null. */
+function finiteOrNull(n: number): number | null {
+  return Number.isFinite(n) ? n : null;
+}
+
 async function persistInsight(
   entityType: InsightEntity,
   entityId: string,
@@ -547,14 +579,22 @@ async function persistInsight(
   const purchaseValue = ins.action_values?.find(
     (a) => a.action_type === "purchase",
   );
-  const purchaseRoas = ins.purchase_roas?.[0]?.value;
+  const roasAction = ins.purchase_roas?.[0];
+  const purchaseRoas = roasAction
+    ? finiteOrNull(
+        Number(
+          roasAction.value ?? roasAction["7d_click"] ?? roasAction["1d_view"],
+        ),
+      )
+    : null;
   const video3s = ins.video_play_actions?.find(
     (a) => a.action_type === "video_view",
   );
 
   const spend = ins.spend ? Number(ins.spend) : 0;
   const impressions = ins.impressions ? Number(ins.impressions) : 0;
-  const purchases = purchase ? Number(purchase.value) : 0;
+  const purchases = actionTotal(purchase);
+  const videoViews3s = video3s ? actionTotal(video3s) : null;
 
   await db.insightsDaily.upsert({
     where: {
@@ -579,26 +619,26 @@ async function persistInsight(
       conversions: purchases,
       purchases,
       conversionValue: purchaseValue
-        ? Number(purchaseValue.value).toFixed(2)
+        ? actionTotal(purchaseValue).toFixed(2)
         : "0",
-      roas: purchaseRoas ? Number(purchaseRoas).toFixed(4) : null,
+      roas: purchaseRoas !== null ? purchaseRoas.toFixed(4) : null,
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
-      videoViews3s: video3s ? Number(video3s.value) : null,
-      videoViewsP25: ins.video_p25_watched_actions?.[0]?.value
-        ? Number(ins.video_p25_watched_actions[0]!.value)
-        : null,
-      videoViewsP50: ins.video_p50_watched_actions?.[0]?.value
-        ? Number(ins.video_p50_watched_actions[0]!.value)
-        : null,
-      videoViewsP75: ins.video_p75_watched_actions?.[0]?.value
-        ? Number(ins.video_p75_watched_actions[0]!.value)
-        : null,
-      videoViewsP100: ins.video_p100_watched_actions?.[0]?.value
-        ? Number(ins.video_p100_watched_actions[0]!.value)
-        : null,
+      videoViews3s,
+      videoViewsP25: finiteOrNull(
+        Number(ins.video_p25_watched_actions?.[0]?.value),
+      ),
+      videoViewsP50: finiteOrNull(
+        Number(ins.video_p50_watched_actions?.[0]?.value),
+      ),
+      videoViewsP75: finiteOrNull(
+        Number(ins.video_p75_watched_actions?.[0]?.value),
+      ),
+      videoViewsP100: finiteOrNull(
+        Number(ins.video_p100_watched_actions?.[0]?.value),
+      ),
       hookRate:
-        video3s && impressions > 0
-          ? (Number(video3s.value) / impressions).toFixed(4)
+        videoViews3s !== null && impressions > 0
+          ? (videoViews3s / impressions).toFixed(4)
           : null,
       raw: ins as unknown as object,
     },
@@ -609,9 +649,9 @@ async function persistInsight(
       purchases,
       conversions: purchases,
       conversionValue: purchaseValue
-        ? Number(purchaseValue.value).toFixed(2)
+        ? actionTotal(purchaseValue).toFixed(2)
         : "0",
-      roas: purchaseRoas ? Number(purchaseRoas).toFixed(4) : null,
+      roas: purchaseRoas !== null ? purchaseRoas.toFixed(4) : null,
       cpa: purchases > 0 ? (spend / purchases).toFixed(2) : null,
       raw: ins as unknown as object,
     },
