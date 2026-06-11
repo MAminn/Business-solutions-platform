@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { GenerateDigestButton } from "@/components/integrations/generate-digest-button";
+import { previousCompletedMonth } from "@/lib/month";
 
 interface PageProps {
   params: { id: string };
@@ -82,6 +83,8 @@ export default async function AdAccountPage({ params }: PageProps) {
     },
     orderBy: { createdAt: "asc" },
   });
+
+  const prevMonth = previousCompletedMonth();
 
   const header = (
     <div className='space-y-4'>
@@ -172,11 +175,22 @@ export default async function AdAccountPage({ params }: PageProps) {
 
                   <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-3'>
                     <GenerateDigestButton connectionId={conn.id} />
+                    <GenerateDigestButton
+                      connectionId={conn.id}
+                      mode='monthly'
+                    />
                     <Button asChild size='sm' variant='outline'>
                       <a
                         href={`/api/connections/${conn.id}/creative-bundle`}
                         download>
                         Download creative bundle
+                      </a>
+                    </Button>
+                    <Button asChild size='sm' variant='outline'>
+                      <a
+                        href={`/api/connections/${conn.id}/creative-bundle?year=${prevMonth.year}&month=${prevMonth.month}`}
+                        download>
+                        Creative bundle (previous month)
                       </a>
                     </Button>
                   </div>

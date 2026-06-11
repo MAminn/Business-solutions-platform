@@ -6,9 +6,11 @@ import { buildAccountDigest } from "@/server/digest";
 
 interface Props {
   connectionId: string;
+  /** "triage" (default) keeps existing behavior; "monthly" builds the previous-month report. */
+  mode?: "triage" | "monthly";
 }
 
-export function GenerateDigestButton({ connectionId }: Props) {
+export function GenerateDigestButton({ connectionId, mode = "triage" }: Props) {
   const [pending, startTransition] = useTransition();
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +21,10 @@ export function GenerateDigestButton({ connectionId }: Props) {
     setCopied(false);
     startTransition(async () => {
       try {
-        const md = await buildAccountDigest(connectionId);
+        const md = await buildAccountDigest(
+          connectionId,
+          mode === "monthly" ? { mode: "monthly" } : undefined,
+        );
         setMarkdown(md);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to generate digest");
@@ -46,7 +51,11 @@ export function GenerateDigestButton({ connectionId }: Props) {
           variant='outline'
           onClick={handleGenerate}
           disabled={pending}>
-          {pending ? "Generating…" : "Generate digest"}
+          {pending
+            ? "Generating…"
+            : mode === "monthly"
+              ? "Monthly digest (previous month)"
+              : "Generate digest"}
         </Button>
         {markdown && (
           <Button size='sm' variant='outline' onClick={handleCopy}>

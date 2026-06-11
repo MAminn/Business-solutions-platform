@@ -4,6 +4,16 @@ import type { NextRequest } from "next/server";
 import type { CreativeType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
+import {
+  computeMonthCoverage,
+  coverageLine,
+  dayKeyUTC,
+  isValidMonthSpec,
+  monthEndUTC,
+  monthLabel,
+  monthStartUTC,
+} from "@/lib/month";
+import type { MonthSpec } from "@/lib/month";
 
 // ============================================================================
 // Per-connection creative bundle export.
@@ -157,9 +167,25 @@ interface SelectedCreative {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { connectionId: string } },
 ): Promise<Response> {
+  // --- Optional ?year=&month= → calendar-month window ----------------------
+  // When absent, behavior is unchanged (trailing 30-day window).
+  const yearRaw = req.nextUrl.searchParams.get("year");
+  const monthRaw = req.nextUrl.searchParams.get("month");
+  let monthSpec: MonthSpec | null = null;
+  if (yearRaw !== null || monthRaw !== null) {
+    if (yearRaw === null || monthRaw === null) {
+      return plainText(400, "Provide both year and month, or neither.");
+    }
+    const spec = { year: Number(yearRaw), month: Number(monthRaw) };
+    if (!isValidMonthSpec(spec)) {
+      return plainText(400, "Invalid year/month query parameters.");
+    }
+    monthSpec = spec;
+  }
+
   // --- Authentication ------------------------------------------------------
   let user;
   try {
@@ -218,9 +244,15 @@ export async function GET(
     },
   });
 
-  // --- 30 days of ad-level insights, aggregated per ad ----------------------
+  // --- 30 days (or the requested calendar month) of ad-level insights -------
   const now = new Date();
-  const windowStart = subDays(now, WINDOW_DAYS);
+  const windowStart = monthSpec
+    ? monthStartUTC(monthSpec)
+    : subDays(now, WINDOW_DAYS);
+  const windowEnd = monthSpec ? monthEndUTC(monthSpec) : null;
+  const dateFilter = windowEnd
+    ? { gte: windowStart, lte: windowEnd }
+    : { gte: windowStart };
   const adIds = creatives.flatMap((c) => c.ads.map((a) => a.id));
 
   const insightsByAd = new Map<string, CreativeAgg>();
@@ -229,7 +261,7 @@ export async function GET(
       where: {
         entityType: "AD",
         entityId: { in: adIds },
-        date: { gte: windowStart },
+        date: dateFilter,
       },
       select: {
         entityId: true,
@@ -264,6 +296,38 @@ export async function GET(
       cur.videoViewsP100 += r.videoViewsP100 ?? 0;
       insightsByAd.set(r.entityId, cur);
     }
+  }
+
+  // --- Month-mode coverage: distinct ACCOUNT-or-CAMPAIGN insight dates ------
+  // Same coverage check as the monthly digest. Skipped entirely in the
+  // default (trailing 30-day) mode.
+  let monthCoverage: ReturnType<typeof computeMonthCoverage> | null = null;
+  if (monthSpec && windowEnd) {
+    const connCampaigns = await db.campaign.findMany({
+      where: { adAccountConnectionId: conn.id },
+      select: { id: true },
+    });
+    const campaignIds = connCampaigns.map((c) => c.id);
+    const covRows = await db.insightsDaily.findMany({
+      where: {
+        date: { gte: windowStart, lte: windowEnd },
+        OR: [
+          { entityType: "ACCOUNT", entityId: conn.id },
+          ...(campaignIds.length > 0
+            ? [
+                {
+                  entityType: "CAMPAIGN" as const,
+                  entityId: { in: campaignIds },
+                },
+              ]
+            : []),
+        ],
+      },
+      select: { date: true },
+      distinct: ["date"],
+    });
+    const presentKeys = new Set(covRows.map((r) => dayKeyUTC(r.date)));
+    monthCoverage = computeMonthCoverage(monthSpec, presentKeys);
   }
 
   // --- Aggregate per creative across its linked ads -------------------------
@@ -328,19 +392,40 @@ export async function GET(
   lines.push(`- **Client:** ${conn.client.name}`);
   lines.push(`- **Account:** ${conn.accountName} (${conn.platformAccountId})`);
   lines.push(`- **Currency:** ${conn.currency}`);
-  lines.push(
-    `- **Date window:** ${format(windowStart, "yyyy-MM-dd")} → ` +
-      `${format(now, "yyyy-MM-dd")} (last ${WINDOW_DAYS} days)`,
-  );
+  if (monthSpec && windowEnd && monthCoverage) {
+    lines.push(
+      `- **Date window:** ${dayKeyUTC(windowStart)} → ` +
+        `${dayKeyUTC(windowEnd)} ` +
+        `(calendar month ${monthLabel(monthSpec)})`,
+    );
+    lines.push(`- **Coverage:** ${coverageLine(monthCoverage)}`);
+  } else {
+    lines.push(
+      `- **Date window:** ${format(windowStart, "yyyy-MM-dd")} → ` +
+        `${format(now, "yyyy-MM-dd")} (last ${WINDOW_DAYS} days)`,
+    );
+  }
   lines.push(`- **Generated at:** ${format(now, "yyyy-MM-dd HH:mm")}`);
   lines.push("");
+  if (monthSpec && monthCoverage && !monthCoverage.complete) {
+    lines.push(
+      `> ⚠️ **Incomplete coverage for ${monthLabel(monthSpec)}** — missing: ` +
+        `${monthCoverage.missingRanges.join(", ")}. Figures understate ` +
+        `actual delivery for the month.`,
+    );
+    lines.push("");
+  }
   lines.push(
     "> Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.",
   );
   lines.push("");
 
   if (selected.length === 0) {
-    lines.push(`_No creatives with spend in the last ${WINDOW_DAYS} days._`);
+    lines.push(
+      monthSpec
+        ? `_No creatives with spend in ${monthLabel(monthSpec)}._`
+        : `_No creatives with spend in the last ${WINDOW_DAYS} days._`,
+    );
   }
 
   selected.forEach((cr, i) => {
@@ -406,7 +491,9 @@ export async function GET(
     type: "nodebuffer",
     compression: "DEFLATE",
   });
-  const zipName = `creative-bundle-${safeFileToken(conn.accountName)}-${format(now, "yyyy-MM-dd")}.zip`;
+  const zipName = monthSpec
+    ? `creative-bundle-${safeFileToken(conn.accountName)}-${monthLabel(monthSpec)}.zip`
+    : `creative-bundle-${safeFileToken(conn.accountName)}-${format(now, "yyyy-MM-dd")}.zip`;
 
   return new Response(new Uint8Array(buffer), {
     status: 200,

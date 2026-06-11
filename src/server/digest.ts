@@ -5,6 +5,20 @@ import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { InsightEntity } from "@prisma/client";
 import type { ConnectionStatus } from "@prisma/client";
+import {
+  computeMonthCoverage,
+  coverageLine,
+  dayKeyUTC,
+  daysInMonth,
+  isValidMonthSpec,
+  monthDayKey,
+  monthEndUTC,
+  monthLabel,
+  monthStartUTC,
+  previousCompletedMonth,
+  prevMonthOf,
+} from "@/lib/month";
+import type { MonthSpec } from "@/lib/month";
 
 // ============================================================================
 // Per-account Markdown digest builder.
@@ -227,6 +241,7 @@ function escapeInline(value: string): string {
 
 export async function buildAccountDigest(
   connectionId: string,
+  opts?: { mode?: "triage" | "monthly"; year?: number; month?: number },
 ): Promise<string> {
   const user = await requireUser();
 
@@ -261,6 +276,11 @@ export async function buildAccountDigest(
   // but no metric/campaign/ad tables — partial data must not look complete.
   if (conn.insightsBackfilledAt === null) {
     return renderBackfillUnavailable(conn);
+  }
+
+  // Monthly mode branches off here; the triage path below is untouched.
+  if ((opts?.mode ?? "triage") === "monthly") {
+    return buildMonthlyDigest(conn, opts?.year, opts?.month);
   }
 
   const currency = conn.currency;
@@ -860,5 +880,443 @@ function renderBackfillUnavailable(conn: HeaderConn): string {
   );
   lines.push("");
   pushHeaderBlock(lines, conn);
+  return lines.join("\n");
+}
+
+// ===========================================================================
+// Monthly mode
+// ===========================================================================
+//
+// Calendar-month report (dates inclusive, using the stored daily `date`
+// values, which are @db.Date → UTC midnight). Access control and the
+// insightsBackfilledAt hard-block run in buildAccountDigest before this is
+// reached. Reuses the triage aggregation helpers (CoreAgg/addRow/cpm/ctr/…)
+// and the shared header block; the triage render path is untouched.
+
+type DigestConn = HeaderConn & { id: string; clientId: string };
+
+const INSIGHT_ROW_SELECT = {
+  entityId: true,
+  date: true,
+  spend: true,
+  impressions: true,
+  clicks: true,
+  conversions: true,
+  purchases: true,
+  conversionValue: true,
+  reach: true,
+  frequency: true,
+  ctr: true,
+} as const;
+
+/** Calendar weeks (Mon–Sun) clipped to the month. */
+function weekSegments(
+  spec: MonthSpec,
+): Array<{ startDay: number; endDay: number }> {
+  const total = daysInMonth(spec);
+  const segments: Array<{ startDay: number; endDay: number }> = [];
+  let start = 1;
+  for (let d = 1; d <= total; d++) {
+    const dow = new Date(Date.UTC(spec.year, spec.month - 1, d)).getUTCDay();
+    // Sunday (0) closes a calendar week; the month end closes the last one.
+    if (dow === 0 || d === total) {
+      segments.push({ startDay: start, endDay: d });
+      start = d + 1;
+    }
+  }
+  return segments;
+}
+
+async function buildMonthlyDigest(
+  conn: DigestConn,
+  year?: number,
+  month?: number,
+): Promise<string> {
+  // Resolve the report month. When year/month are omitted, default to the
+  // previous completed calendar month relative to today.
+  let spec: MonthSpec;
+  if (year !== undefined || month !== undefined) {
+    if (year === undefined || month === undefined) {
+      throw new Error("Provide both year and month, or neither");
+    }
+    spec = { year, month };
+    if (!isValidMonthSpec(spec)) {
+      throw new Error("Invalid year/month");
+    }
+  } else {
+    spec = previousCompletedMonth();
+  }
+  const prevSpec = prevMonthOf(spec);
+
+  const currency = conn.currency;
+  const now = new Date();
+  const monthStart = monthStartUTC(spec);
+  const monthEnd = monthEndUTC(spec);
+  const prevStart = monthStartUTC(prevSpec);
+  const prevEnd = monthEndUTC(prevSpec);
+
+  // -------------------------------------------------------------------------
+  // Entity ID maps (same shape as triage mode).
+  // -------------------------------------------------------------------------
+  const campaigns = await db.campaign.findMany({
+    where: { adAccountConnectionId: conn.id },
+    select: { id: true, name: true },
+  });
+  const campaignName = new Map(campaigns.map((c) => [c.id, c.name]));
+  const campaignIds = campaigns.map((c) => c.id);
+
+  const ads = await db.ad.findMany({
+    where: { adSet: { campaign: { adAccountConnectionId: conn.id } } },
+    select: { id: true, name: true },
+  });
+  const adIds = ads.map((a) => a.id);
+  const adName = new Map(ads.map((a) => [a.id, a.name]));
+
+  // -------------------------------------------------------------------------
+  // Insight rows: previous month start → report month end (inclusive).
+  // Account-level rows preferred; campaign-level fallback labelled "derived".
+  // -------------------------------------------------------------------------
+  const accountRows = await db.insightsDaily.findMany({
+    where: {
+      entityType: InsightEntity.ACCOUNT,
+      entityId: conn.id,
+      date: { gte: prevStart, lte: monthEnd },
+    },
+    select: INSIGHT_ROW_SELECT,
+    orderBy: { date: "asc" },
+  });
+
+  const campaignRows =
+    campaignIds.length > 0
+      ? await db.insightsDaily.findMany({
+          where: {
+            entityType: InsightEntity.CAMPAIGN,
+            entityId: { in: campaignIds },
+            date: { gte: prevStart, lte: monthEnd },
+          },
+          select: INSIGHT_ROW_SELECT,
+          orderBy: { date: "asc" },
+        })
+      : [];
+
+  const adRows =
+    adIds.length > 0
+      ? await db.insightsDaily.findMany({
+          where: {
+            entityType: InsightEntity.AD,
+            entityId: { in: adIds },
+            date: { gte: monthStart, lte: monthEnd },
+          },
+          select: INSIGHT_ROW_SELECT,
+          orderBy: { date: "asc" },
+        })
+      : [];
+
+  const inMonth = (d: Date): boolean => d >= monthStart && d <= monthEnd;
+  const inPrev = (d: Date): boolean => d >= prevStart && d <= prevEnd;
+
+  // -------------------------------------------------------------------------
+  // Coverage: distinct ACCOUNT-or-CAMPAIGN insight dates vs days in month,
+  // for both the report month and the comparison month.
+  // -------------------------------------------------------------------------
+  const monthKeys = new Set<string>();
+  const prevKeys = new Set<string>();
+  for (const r of [...accountRows, ...campaignRows]) {
+    if (inMonth(r.date)) monthKeys.add(dayKeyUTC(r.date));
+    else if (inPrev(r.date)) prevKeys.add(dayKeyUTC(r.date));
+  }
+  const coverage = computeMonthCoverage(spec, monthKeys);
+  const prevCoverage = computeMonthCoverage(prevSpec, prevKeys);
+  const prevColLabel = `${monthLabel(prevSpec)}${
+    prevCoverage.complete ? "" : " (partial)"
+  }`;
+
+  // -------------------------------------------------------------------------
+  // Aggregations. Account-level rows preferred, campaign fallback (derived).
+  // -------------------------------------------------------------------------
+  const usingDerivedAccount = accountRows.length === 0;
+  const accountSource: InsightRow[] = usingDerivedAccount
+    ? campaignRows
+    : accountRows;
+
+  const acctMonth = emptyAgg();
+  const acctPrev = emptyAgg();
+  const weeks = weekSegments(spec);
+  const weekAggs = weeks.map(() => emptyAgg());
+  for (const r of accountSource) {
+    if (inMonth(r.date)) {
+      addRow(acctMonth, r);
+      const day = r.date.getUTCDate();
+      const idx = weeks.findIndex((w) => day >= w.startDay && day <= w.endDay);
+      if (idx >= 0) addRow(weekAggs[idx], r);
+    } else if (inPrev(r.date)) {
+      addRow(acctPrev, r);
+    }
+  }
+
+  const campMonth = new Map<string, CoreAgg>();
+  for (const r of campaignRows) {
+    if (!inMonth(r.date)) continue;
+    const a = campMonth.get(r.entityId) ?? emptyAgg();
+    addRow(a, r);
+    campMonth.set(r.entityId, a);
+  }
+
+  const adMonth = new Map<string, CoreAgg>();
+  for (const r of adRows) {
+    const a = adMonth.get(r.entityId) ?? emptyAgg();
+    addRow(a, r);
+    adMonth.set(r.entityId, a);
+  }
+
+  // =========================================================================
+  // Render
+  // =========================================================================
+  const lines: string[] = [];
+
+  lines.push(`# Monthly digest — ${conn.client.name} — ${monthLabel(spec)}`);
+  lines.push("");
+  lines.push(
+    "> Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.",
+  );
+  lines.push("");
+
+  pushHeaderBlock(lines, conn);
+  lines.push(
+    `- **Report month:** ${monthLabel(spec)} ` +
+      `(${monthDayKey(spec, 1)} → ${monthDayKey(spec, coverage.totalDays)})`,
+  );
+  lines.push(`- **Coverage:** ${coverageLine(coverage)}`);
+  lines.push("");
+
+  if (!coverage.complete) {
+    lines.push(
+      `> ⚠️ **Incomplete coverage for ${monthLabel(spec)}** — missing: ` +
+        `${coverage.missingRanges.join(", ")}. Monthly totals understate ` +
+        `actual delivery; consider a backfill before sharing this report.`,
+    );
+    lines.push("");
+  }
+
+  // -------------------------------------------------------------------------
+  // Monthly totals vs previous calendar month.
+  // -------------------------------------------------------------------------
+  lines.push("## Monthly totals");
+  lines.push("");
+  if (usingDerivedAccount) {
+    lines.push(
+      "_No account-level rows present — figures below are **derived** by " +
+        "summing campaign-level rows._",
+    );
+    lines.push("");
+  }
+
+  lines.push(`| Metric | ${monthLabel(spec)} | ${prevColLabel} | Δ |`);
+  lines.push("| --- | ---: | ---: | ---: |");
+  lines.push(
+    `| Spend | ${money(acctMonth.spend, currency)} | ${money(
+      acctPrev.spend,
+      currency,
+    )} | ${deltaLabel(acctMonth.spend, acctPrev.spend)} |`,
+  );
+  lines.push(
+    `| Impressions | ${acctMonth.impressions.toLocaleString("en-US")} | ` +
+      `${acctPrev.impressions.toLocaleString("en-US")} | ` +
+      `${deltaLabel(acctMonth.impressions, acctPrev.impressions)} |`,
+  );
+  lines.push(
+    `| Clicks | ${acctMonth.clicks.toLocaleString("en-US")} | ` +
+      `${acctPrev.clicks.toLocaleString("en-US")} | ` +
+      `${deltaLabel(acctMonth.clicks, acctPrev.clicks)} |`,
+  );
+  lines.push(
+    `| CTR | ${pct(ctr(acctMonth))} | ${pct(ctr(acctPrev))} | ` +
+      `${deltaLabel(ctr(acctMonth), ctr(acctPrev))} |`,
+  );
+  lines.push(
+    `| CPM | ${money(cpm(acctMonth), currency)} | ${money(
+      cpm(acctPrev),
+      currency,
+    )} | ${deltaLabel(cpm(acctMonth), cpm(acctPrev))} |`,
+  );
+  lines.push(
+    `| CPC | ${money(cpc(acctMonth), currency)} | ${money(
+      cpc(acctPrev),
+      currency,
+    )} | ${deltaLabel(cpc(acctMonth), cpc(acctPrev))} |`,
+  );
+  lines.push(
+    `| Avg frequency | ${mult(frequency(acctMonth))} | ` +
+      `${mult(frequency(acctPrev))} | ` +
+      `${deltaLabel(frequency(acctMonth), frequency(acctPrev))} |`,
+  );
+  lines.push(
+    `| Purchases | ${acctMonth.purchases.toLocaleString("en-US")} | ` +
+      `${acctPrev.purchases.toLocaleString("en-US")} | ` +
+      `${deltaLabel(acctMonth.purchases, acctPrev.purchases)} |`,
+  );
+  lines.push(
+    `| Conversions | ${acctMonth.conversions.toLocaleString("en-US")} | ` +
+      `${acctPrev.conversions.toLocaleString("en-US")} | ` +
+      `${deltaLabel(acctMonth.conversions, acctPrev.conversions)} |`,
+  );
+  lines.push(
+    `| Conversion value | ${money(acctMonth.conversionValue, currency)} | ` +
+      `${money(acctPrev.conversionValue, currency)} | ` +
+      `${deltaLabel(acctMonth.conversionValue, acctPrev.conversionValue)} |`,
+  );
+  lines.push(
+    `| CPA (Meta) | ${money(cpa(acctMonth), currency)} | ${money(
+      cpa(acctPrev),
+      currency,
+    )} | ${deltaLabel(cpa(acctMonth), cpa(acctPrev))} |`,
+  );
+  lines.push(
+    `| ROAS (Meta) | ${mult(roas(acctMonth))} | ${mult(roas(acctPrev))} | ` +
+      `${deltaLabel(roas(acctMonth), roas(acctPrev))} |`,
+  );
+  lines.push("");
+
+  // -------------------------------------------------------------------------
+  // Weekly breakdown (calendar weeks within the month).
+  // -------------------------------------------------------------------------
+  lines.push("## Weekly breakdown");
+  lines.push("");
+  lines.push("| Week | Spend | Purchases | CPA (Meta) | ROAS (Meta) |");
+  lines.push("| --- | ---: | ---: | ---: | ---: |");
+  weeks.forEach((w, i) => {
+    const a = weekAggs[i];
+    lines.push(
+      `| Week ${i + 1} (${monthDayKey(spec, w.startDay)} → ` +
+        `${monthDayKey(spec, w.endDay)}) | ${money(a.spend, currency)} | ` +
+        `${a.purchases.toLocaleString("en-US")} | ${money(
+          cpa(a),
+          currency,
+        )} | ${mult(roas(a))} |`,
+    );
+  });
+  lines.push("");
+
+  // -------------------------------------------------------------------------
+  // Campaigns: top 10 by month spend (no flag column in monthly mode).
+  // -------------------------------------------------------------------------
+  lines.push("## Campaigns (top 10 by month spend)");
+  lines.push("");
+  const rankedCampaigns = [...campMonth.entries()]
+    .map(([id, agg]) => ({ id, agg }))
+    .filter((c) => c.agg.spend > 0)
+    .sort((a, b) => b.agg.spend - a.agg.spend)
+    .slice(0, 10);
+
+  if (rankedCampaigns.length === 0) {
+    lines.push(`_No campaign spend in ${monthLabel(spec)}._`);
+    lines.push("");
+  } else {
+    lines.push(
+      "| Campaign | Spend | Purchases | CPA (Meta) | ROAS (Meta) | CTR |",
+    );
+    lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+    for (const c of rankedCampaigns) {
+      const name = campaignName.get(c.id) ?? c.id;
+      lines.push(
+        `| ${escapeCell(name)} | ${money(c.agg.spend, currency)} | ` +
+          `${c.agg.purchases.toLocaleString("en-US")} | ${money(
+            cpa(c.agg),
+            currency,
+          )} | ${mult(roas(c.agg))} | ${pct(ctr(c.agg))} |`,
+      );
+    }
+    lines.push("");
+  }
+
+  // -------------------------------------------------------------------------
+  // Ads: top 5 by month spend, bottom 5 by Meta CPA (no fatigue column).
+  // -------------------------------------------------------------------------
+  lines.push("## Ads / creatives");
+  lines.push("");
+
+  const adsWithSpend = [...adMonth.entries()]
+    .map(([id, agg]) => ({ id, agg }))
+    .filter((a) => a.agg.spend > 0);
+
+  const monthlyAdRow = (id: string, agg: CoreAgg): string => {
+    const name = adName.get(id) ?? id;
+    return (
+      `| ${escapeCell(name)} | ${money(agg.spend, currency)} | ` +
+      `${agg.purchases.toLocaleString("en-US")} | ${money(
+        cpa(agg),
+        currency,
+      )} | ${pct(ctr(agg))} | ${mult(frequency(agg))} |`
+    );
+  };
+
+  if (adsWithSpend.length === 0) {
+    lines.push(`_No ad spend in ${monthLabel(spec)}._`);
+    lines.push("");
+  } else {
+    const topBySpend = [...adsWithSpend]
+      .sort((a, b) => b.agg.spend - a.agg.spend)
+      .slice(0, 5);
+    // Bottom 5 by Meta CPA among ads with spend; ads with zero purchases
+    // (CPA undefined) rank worst — same ranking as triage mode.
+    const bottomByCpa = [...adsWithSpend]
+      .sort((a, b) => effRank(b.agg) - effRank(a.agg))
+      .slice(0, 5);
+
+    lines.push("### Top 5 ads by month spend");
+    lines.push("");
+    lines.push("| Ad | Spend | Purchases | CPA (Meta) | CTR | Freq |");
+    lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+    for (const a of topBySpend) lines.push(monthlyAdRow(a.id, a.agg));
+    lines.push("");
+
+    lines.push("### Bottom 5 ads by Meta CPA (ads with spend)");
+    lines.push("");
+    lines.push("| Ad | Spend | Purchases | CPA (Meta) | CTR | Freq |");
+    lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
+    for (const a of bottomByCpa) lines.push(monthlyAdRow(a.id, a.agg));
+    lines.push("");
+  }
+
+  // -------------------------------------------------------------------------
+  // Month spend concentration (campaign-level month rows).
+  // -------------------------------------------------------------------------
+  const spendValues = [...campMonth.values()]
+    .map((a) => a.spend)
+    .filter((s) => s > 0)
+    .sort((a, b) => b - a);
+  const totalMonthSpend = spendValues.reduce((acc, s) => acc + s, 0);
+  const totalCampaigns = campaignIds.length;
+
+  lines.push("## Structure");
+  lines.push("");
+  if (totalMonthSpend > 0 && spendValues.length > 0) {
+    let cumulative = 0;
+    let topN = 0;
+    for (const s of spendValues) {
+      cumulative += s;
+      topN += 1;
+      if (cumulative / totalMonthSpend >= 0.75) break;
+    }
+    const sharePct = (cumulative / totalMonthSpend) * 100;
+    lines.push(
+      `- **Spend concentration:** ${sharePct.toFixed(0)}% of ` +
+        `${monthLabel(spec)} spend in ${topN} of ${totalCampaigns} ` +
+        `campaigns (${spendValues.length} campaigns had any spend).`,
+    );
+  } else {
+    lines.push(
+      `- **Spend concentration:** no campaign spend in ${monthLabel(spec)} ` +
+        `(${totalCampaigns} campaigns total).`,
+    );
+  }
+  lines.push("");
+
+  lines.push("---");
+  lines.push(
+    `_Generated ${fmtDate(now)} · report month ${monthLabel(spec)} · ` +
+      `compared against ${prevColLabel}._`,
+  );
+
   return lines.join("\n");
 }
