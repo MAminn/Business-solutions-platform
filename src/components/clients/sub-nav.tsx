@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 
 export const CLIENT_SUB_TABS = [
   { label: "Overview", segment: "" },
+  { label: "Analysis", segment: "analysis" },
   { label: "Strategy", segment: "strategy" },
   { label: "Campaigns", segment: "campaigns" },
   { label: "Creatives", segment: "creatives" },
@@ -10,8 +11,7 @@ export const CLIENT_SUB_TABS = [
   { label: "Ad Account", segment: "ad-account" },
 ] as const;
 
-export type ClientSubTabSegment =
-  (typeof CLIENT_SUB_TABS)[number]["segment"];
+export type ClientSubTabSegment = (typeof CLIENT_SUB_TABS)[number]["segment"];
 
 interface ClientSubNavProps {
   clientId: string;
