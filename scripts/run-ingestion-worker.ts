@@ -121,6 +121,24 @@ async function main(): Promise<void> {
     return;
   }
 
+  // One-time reclaim: jobs left RUNNING by a previously-killed worker are
+  // stranded (no live worker owns them). Reset any that have not been touched
+  // for STALE_RUNNING_MS back to PENDING so this run can retry them.
+  const STALE_RUNNING_MS = 10 * 60 * 1000; // 10 minutes
+  const reclaimed = await db.ingestionJob.updateMany({
+    where: {
+      status: IngestionJobStatus.RUNNING,
+      kind: CreativeAssetKind.IMAGE,
+      updatedAt: { lt: new Date(Date.now() - STALE_RUNNING_MS) },
+    },
+    data: { status: IngestionJobStatus.PENDING },
+  });
+  if (reclaimed.count > 0) {
+    console.log(
+      `[worker] reclaimed ${reclaimed.count} stranded RUNNING job(s) back to PENDING.`,
+    );
+  }
+
   let processed = 0;
   // Drain in passes until no PENDING IMAGE jobs remain.
   for (;;) {
