@@ -384,9 +384,83 @@ model Creative {
 
   adAccountConnection AdAccountConnection @relation(fields: [adAccountConnectionId], references: [id], onDelete: Cascade)
   ads                 Ad[]
+  assets              CreativeAsset[]
 
   @@unique([adAccountConnectionId, platformId])
   @@index([adAccountConnectionId])
+}
+
+// ============================================================================
+// CREATIVE ASSET INGESTION (V3 — local-storage image ingestion)
+//
+// Additive only. Mirrors the underlying media for spending creatives into a
+// private, locally-persisted store served exclusively through an
+// authenticated route. cdnUrl is reserved for a future S3/CDN driver and is
+// left null in Step 1 (local-storage image ingestion).
+// ============================================================================
+
+enum CreativeAssetKind {
+  IMAGE
+  VIDEO
+  POSTER
+}
+
+enum CreativeAssetStatus {
+  PENDING
+  RESOLVING
+  FETCHING
+  READY
+  FAILED
+  UNAVAILABLE
+}
+
+model CreativeAsset {
+  id          String              @id @default(cuid())
+  creativeId  String
+  kind        CreativeAssetKind
+  status      CreativeAssetStatus @default(PENDING)
+  sourceUrl   String?
+  storageKey  String?
+  // Reserved for a future S3/CDN driver. Stays null while the local driver
+  // is in use (Step 1).
+  cdnUrl      String?
+  width       Int?
+  height      Int?
+  bytes       Int?
+  mimeType    String?
+  contentHash String?
+  attempts    Int                 @default(0)
+  lastError   String?
+  resolvedAt  DateTime?
+  storedAt    DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  creative    Creative            @relation(fields: [creativeId], references: [id], onDelete: Cascade)
+
+  @@unique([creativeId, kind])
+  @@index([status])
+  @@index([contentHash])
+}
+
+enum IngestionJobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model IngestionJob {
+  id         String             @id @default(cuid())
+  creativeId String
+  kind       CreativeAssetKind
+  status     IngestionJobStatus @default(PENDING)
+  attempts   Int                @default(0)
+  lastError  String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  @@index([status])
 }
 
 model Ad {

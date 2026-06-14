@@ -109,6 +109,20 @@ export interface MetaCreative {
   image_hash?: string;
 }
 
+/**
+ * A row from the `/act_{id}/adimages` edge. `permalink_url` is a stable,
+ * non-expiring source for the full-resolution image; `url` is the (often
+ * shorter-lived) CDN URL. Used by creative-asset ingestion to pick the best
+ * download source for a given image hash.
+ */
+export interface MetaAdImage {
+  hash?: string;
+  permalink_url?: string;
+  url?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface MetaAd {
   id: string;
   name: string;
@@ -436,5 +450,40 @@ export class MetaClient {
     }
 
     return rows;
+  }
+
+  /**
+   * Resolve ad-image metadata (including a stable `permalink_url` source) for a
+   * set of image hashes on an ad account. Read-only — used by creative-asset
+   * ingestion to find the best source URL before downloading. Hashes are sent
+   * in batches and every page of `paging.next` is followed via `getAllPages`,
+   * reusing the same 150ms inter-call spacing and MetaRateLimitError handling
+   * as every other edge.
+   */
+  async resolveAdImages(
+    adAccountId: string,
+    hashes: string[],
+  ): Promise<MetaAdImage[]> {
+    const unique = Array.from(
+      new Set(hashes.filter((h) => typeof h === "string" && h.length > 0)),
+    );
+    if (unique.length === 0) return [];
+
+    const BATCH = 50;
+    const out: MetaAdImage[] = [];
+    for (let i = 0; i < unique.length; i += BATCH) {
+      const batch = unique.slice(i, i + BATCH);
+      const rows = await this.getAllPages<MetaAdImage>(
+        `/${adAccountId}/adimages`,
+        {
+          fields: "permalink_url,url,width,height,hash",
+          hashes: JSON.stringify(batch),
+          limit: "500",
+        },
+        `/${adAccountId}/adimages`,
+      );
+      out.push(...rows);
+    }
+    return out;
   }
 }

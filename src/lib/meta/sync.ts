@@ -17,6 +17,7 @@
 
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
+import { enqueueImageIngestionForConnection } from "@/lib/assets/enqueue";
 import { MetaClient } from "./client";
 import type { MetaCreative } from "./client";
 import {
@@ -398,6 +399,17 @@ export async function syncStructural(connectionId: string): Promise<void> {
       await db.ad.deleteMany({ where: { id: { in: staleAdIds } } });
       await db.adSet.deleteMany({ where: { id: { in: staleAdSetIds } } });
       await db.campaign.deleteMany({ where: { id: { in: staleCampaignIds } } });
+    }
+
+    // ---- Enqueue creative-asset ingestion (row inserts only) ------------
+    // Gated behind ASSET_INGESTION_ENABLED (no-op when disabled). Queues
+    // PENDING IngestionJob rows for active/spending creatives — no media is
+    // fetched here, so structural sync timing is unaffected. Never let an
+    // enqueue hiccup fail the structural job.
+    try {
+      await enqueueImageIngestionForConnection(connectionId);
+    } catch (err) {
+      console.error("[assets] enqueue hook failed (non-fatal):", err);
     }
 
     return { recordsSynced: records, result: undefined };
