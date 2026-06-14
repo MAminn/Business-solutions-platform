@@ -4,6 +4,7 @@ import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
+import { groupCreativesByAsset } from "@/lib/creatives/group-by-asset";
 import {
   CreativesView,
   type CreativeItem,
@@ -151,34 +152,20 @@ export default async function ClientCreativesPage({ params }: PageProps) {
   // Collapse creatives that point at the same underlying asset/post into one
   // group. Many Creative rows (one per ad) can share a single asset, which
   // previously rendered as duplicate cards.
-  type CreativeRow = (typeof creatives)[number];
-  const normalizeImageUrl = (url: string | null): string | null => {
-    if (!url) return null;
-    try {
-      const u = new URL(url);
-      // Drop query string (CDN signing / cache-busting params differ per row).
-      return `${u.origin}${u.pathname}`;
-    } catch {
-      return url;
-    }
-  };
-  const groupKeyFor = (cr: CreativeRow): string =>
-    cr.effectiveObjectStoryId ??
-    cr.objectStoryId ??
-    cr.videoId ??
-    cr.imageHash ??
-    normalizeImageUrl(cr.imageUrl) ??
-    cr.id;
+  const groups = groupCreativesByAsset(creatives);
 
-  const groups = new Map<string, CreativeRow[]>();
-  for (const cr of creatives) {
-    const key = groupKeyFor(cr);
-    const list = groups.get(key) ?? [];
-    list.push(cr);
-    groups.set(key, list);
-  }
+  // One-time production comparison against the DB audit (no UI rendering).
+  console.info(
+    "[creatives] asset dedupe",
+    JSON.stringify({
+      clientId: client.id,
+      connectionIds,
+      rawCreatives: creatives.length,
+      groupedCards: groups.length,
+    }),
+  );
 
-  const items: CreativeItem[] = Array.from(groups.values()).map((members) => {
+  const items: CreativeItem[] = groups.map((members) => {
     const primary = members[0];
     // Union the ads of every member creative in the group.
     const ads = members.flatMap((m) => m.ads);
