@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { subDays } from "date-fns";
+import { CreativeAssetKind, CreativeAssetStatus } from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -154,6 +155,24 @@ export default async function ClientCreativesPage({ params }: PageProps) {
   // previously rendered as duplicate cards.
   const groups = groupCreativesByAsset(creatives);
 
+  // Resolve READY full-res image assets (Step 1 ingestion) for every member
+  // creative in one query, so cards/drawer can render from the authenticated
+  // /api/creative-assets route instead of a (possibly expired) Meta URL.
+  const allCreativeIds = groups.flat().map((m) => m.id);
+  const readyAssets = allCreativeIds.length
+    ? await db.creativeAsset.findMany({
+        where: {
+          creativeId: { in: allCreativeIds },
+          kind: CreativeAssetKind.IMAGE,
+          status: CreativeAssetStatus.READY,
+        },
+        select: { id: true, creativeId: true },
+      })
+    : [];
+  const assetIdByCreative = new Map(
+    readyAssets.map((a) => [a.creativeId, a.id]),
+  );
+
   // One-time production comparison against the DB audit (no UI rendering).
   console.info(
     "[creatives] asset dedupe",
@@ -227,8 +246,19 @@ export default async function ClientCreativesPage({ params }: PageProps) {
     const launchDate =
       daily.length > 0 ? daily[0].date : primary.createdAt.toISOString();
 
-    // Preview: first member's imageUrl, then thumbnailUrl (prefer imageUrl).
-    const preview = primary.imageUrl ?? primary.thumbnailUrl ?? null;
+    // Prefer a locally-ingested READY image asset (served through the
+    // authenticated route) over Meta URLs. Take the first member that has one,
+    // preserving the group's existing member order.
+    const readyAssetId = members
+      .map((m) => assetIdByCreative.get(m.id))
+      .find((id): id is string => Boolean(id));
+    const readyAssetUrl = readyAssetId
+      ? `/api/creative-assets/${readyAssetId}`
+      : null;
+
+    // Preview: READY asset, then first member's imageUrl, then thumbnailUrl.
+    const preview =
+      readyAssetUrl ?? primary.imageUrl ?? primary.thumbnailUrl ?? null;
 
     const linkedAds: CreativeLinkedAd[] = ads.map((ad) => ({
       id: ad.id,
