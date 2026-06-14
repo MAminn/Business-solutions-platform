@@ -371,6 +371,12 @@ model Creative {
   headline              String?
   linkUrl               String?
   callToAction          String?
+  // Asset-identity fields (nullable; populate on next structural sync). Used to
+  // group duplicate Creative rows that point at the same underlying asset/post.
+  objectStoryId           String?
+  effectiveObjectStoryId  String?
+  imageHash               String?
+  videoId                 String?
   isWinner              Boolean      @default(false) // tagged manually or via rule
   raw                   Json?
   createdAt             DateTime     @default(now())

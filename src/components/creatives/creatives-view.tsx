@@ -44,6 +44,14 @@ export interface CreativeDailyPoint {
   frequency: number | null;
 }
 
+export interface CreativeLinkedAd {
+  id: string;
+  name: string | null;
+  effectiveStatus: string | null;
+  adsetName: string | null;
+  campaignName: string | null;
+}
+
 export interface CreativeItem {
   id: string;
   name: string;
@@ -60,6 +68,7 @@ export interface CreativeItem {
   launchDate: string | null; // ISO
   reviewUrl: string | null;
   daily: CreativeDailyPoint[];
+  linkedAds?: CreativeLinkedAd[];
 }
 
 // ---------------------------------------------------------------------------
@@ -677,14 +686,51 @@ function CreativeDrawer({
                     <p className='mb-2 text-[11px] uppercase tracking-wider text-muted-foreground'>
                       Linked ads
                     </p>
-                    <DetailRow
-                      label='Campaign'
-                      value={item.campaignName ?? "—"}
-                    />
-                    <DetailRow label='Ad set' value={item.adsetName ?? "—"} />
-                    <DetailRow label='Ad' value={item.adName ?? "—"} />
-                    {item.adPlatformId && (
-                      <DetailRow label='Ad ID' value={item.adPlatformId} />
+                    {item.linkedAds && item.linkedAds.length > 0 ? (
+                      <div className='space-y-2'>
+                        {item.linkedAds.map((ad) => (
+                          <div
+                            key={ad.id}
+                            className='rounded-md border border-border/40 p-2'>
+                            <div className='flex items-center justify-between gap-2'>
+                              <span
+                                className='truncate text-sm font-medium text-foreground'
+                                title={ad.name ?? undefined}>
+                                {ad.name ?? "—"}
+                              </span>
+                              {ad.effectiveStatus && (
+                                <Badge
+                                  variant={statusVariant(ad.effectiveStatus)}
+                                  withDot>
+                                  {isActive(ad.effectiveStatus)
+                                    ? "Active"
+                                    : "Paused"}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className='mt-0.5 truncate text-[11px] text-muted-foreground'>
+                              {[ad.campaignName, ad.adsetName]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <DetailRow
+                          label='Campaign'
+                          value={item.campaignName ?? "—"}
+                        />
+                        <DetailRow
+                          label='Ad set'
+                          value={item.adsetName ?? "—"}
+                        />
+                        <DetailRow label='Ad' value={item.adName ?? "—"} />
+                        {item.adPlatformId && (
+                          <DetailRow label='Ad ID' value={item.adPlatformId} />
+                        )}
+                      </>
                     )}
                   </div>
                   <div>

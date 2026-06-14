@@ -104,6 +104,9 @@ export interface MetaCreative {
   title?: string;
   call_to_action_type?: string;
   object_type?: string;
+  object_story_id?: string;
+  effective_object_story_id?: string;
+  image_hash?: string;
 }
 
 export interface MetaAd {
@@ -342,7 +345,7 @@ export class MetaClient {
   async listAds(adSetId: string): Promise<MetaAd[]> {
     const data = await this.get<{ data: MetaAd[] }>(`/${adSetId}/ads`, {
       fields:
-        "id,name,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type}",
+        "id,name,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type,object_story_id,effective_object_story_id,image_hash}",
       limit: "200",
     });
     return data.data;
@@ -359,7 +362,7 @@ export class MetaClient {
       `/${adAccountId}/ads`,
       {
         fields:
-          "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type}",
+          "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type,object_story_id,effective_object_story_id,image_hash}",
         limit: "500",
       },
       `/${adAccountId}/ads`,

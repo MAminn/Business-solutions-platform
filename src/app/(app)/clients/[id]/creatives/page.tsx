@@ -8,6 +8,7 @@ import {
   CreativesView,
   type CreativeItem,
   type CreativeDailyPoint,
+  type CreativeLinkedAd,
 } from "@/components/creatives/creatives-view";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,22 @@ function num(value: unknown): number {
 function buildMetaAdReviewUrl(accountId: string, adId: string): string {
   const numericAccountId = accountId.replace(/^act_/, "");
   return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${encodeURIComponent(numericAccountId)}&selected_ad_ids=${encodeURIComponent(adId)}`;
+}
+
+// Direct link to the published Facebook post backing the creative, derived from
+// the (effective_)object_story_id of the form "{pageId}_{postId}". Read-only
+// shortcut — not an API call.
+function buildMetaPreviewUrl(
+  effectiveObjectStoryId: string | null,
+  objectStoryId: string | null,
+): string | null {
+  const storyId = effectiveObjectStoryId ?? objectStoryId;
+  if (!storyId) return null;
+  const sep = storyId.indexOf("_");
+  if (sep <= 0 || sep >= storyId.length - 1) return null;
+  const pageId = storyId.slice(0, sep);
+  const postId = storyId.slice(sep + 1);
+  return `https://www.facebook.com/${encodeURIComponent(pageId)}/posts/${encodeURIComponent(postId)}`;
 }
 
 export default async function ClientCreativesPage({ params }: PageProps) {
@@ -71,6 +88,10 @@ export default async function ClientCreativesPage({ params }: PageProps) {
       headline: true,
       bodyText: true,
       callToAction: true,
+      objectStoryId: true,
+      effectiveObjectStoryId: true,
+      imageHash: true,
+      videoId: true,
       createdAt: true,
       adAccountConnectionId: true,
       ads: {
@@ -127,10 +148,44 @@ export default async function ClientCreativesPage({ params }: PageProps) {
     }
   }
 
-  const items: CreativeItem[] = creatives.map((cr) => {
-    // Merge daily rows across all ads of this creative, keyed by date.
+  // Collapse creatives that point at the same underlying asset/post into one
+  // group. Many Creative rows (one per ad) can share a single asset, which
+  // previously rendered as duplicate cards.
+  type CreativeRow = (typeof creatives)[number];
+  const normalizeImageUrl = (url: string | null): string | null => {
+    if (!url) return null;
+    try {
+      const u = new URL(url);
+      // Drop query string (CDN signing / cache-busting params differ per row).
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return url;
+    }
+  };
+  const groupKeyFor = (cr: CreativeRow): string =>
+    cr.effectiveObjectStoryId ??
+    cr.objectStoryId ??
+    cr.videoId ??
+    cr.imageHash ??
+    normalizeImageUrl(cr.imageUrl) ??
+    cr.id;
+
+  const groups = new Map<string, CreativeRow[]>();
+  for (const cr of creatives) {
+    const key = groupKeyFor(cr);
+    const list = groups.get(key) ?? [];
+    list.push(cr);
+    groups.set(key, list);
+  }
+
+  const items: CreativeItem[] = Array.from(groups.values()).map((members) => {
+    const primary = members[0];
+    // Union the ads of every member creative in the group.
+    const ads = members.flatMap((m) => m.ads);
+
+    // Merge daily rows across all ads of this group, keyed by date.
     const byDate = new Map<string, CreativeDailyPoint>();
-    for (const ad of cr.ads) {
+    for (const ad of ads) {
       for (const p of rowsByAd.get(ad.id) ?? []) {
         const cur = byDate.get(p.date);
         if (!cur) {
@@ -154,34 +209,54 @@ export default async function ClientCreativesPage({ params }: PageProps) {
       a.date.localeCompare(b.date),
     );
 
-    const primaryAd = cr.ads[0];
+    const primaryAd = ads[0];
     // Prefer a linked ad that actually spent in the window for the deep link.
     const reviewAd =
-      cr.ads.find(
+      ads.find(
         (ad) =>
           ad.platformId && (rowsByAd.get(ad.id) ?? []).some((p) => p.spend > 0),
       ) ??
-      cr.ads.find((ad) => ad.platformId) ??
+      ads.find((ad) => ad.platformId) ??
       primaryAd;
-    const accountId = accountIdByConnection.get(cr.adAccountConnectionId);
-    const reviewUrl =
+    const accountId = accountIdByConnection.get(primary.adAccountConnectionId);
+    const adReviewUrl =
       reviewAd?.platformId && accountId
         ? buildMetaAdReviewUrl(accountId, reviewAd.platformId)
         : null;
+    // Prefer a direct link to the published post; fall back to Ads Manager.
+    const storyMember =
+      members.find((m) => m.effectiveObjectStoryId ?? m.objectStoryId) ??
+      primary;
+    const reviewUrl =
+      buildMetaPreviewUrl(
+        storyMember.effectiveObjectStoryId,
+        storyMember.objectStoryId,
+      ) ?? adReviewUrl;
 
     // Launch date: first day with delivery if available, else creation date.
     const launchDate =
-      daily.length > 0 ? daily[0].date : cr.createdAt.toISOString();
+      daily.length > 0 ? daily[0].date : primary.createdAt.toISOString();
+
+    // Preview: first member's imageUrl, then thumbnailUrl (prefer imageUrl).
+    const preview = primary.imageUrl ?? primary.thumbnailUrl ?? null;
+
+    const linkedAds: CreativeLinkedAd[] = ads.map((ad) => ({
+      id: ad.id,
+      name: ad.name,
+      effectiveStatus: ad.effectiveStatus,
+      adsetName: ad.adSet?.name ?? null,
+      campaignName: ad.adSet?.campaign?.name ?? null,
+    }));
 
     return {
-      id: cr.id,
-      name: cr.name,
-      type: cr.type,
+      id: primary.id,
+      name: primary.name,
+      type: primary.type,
       status: primaryAd?.effectiveStatus ?? null,
-      preview: cr.thumbnailUrl ?? cr.imageUrl ?? null,
-      bodyText: cr.bodyText,
-      headline: cr.headline,
-      callToAction: cr.callToAction,
+      preview,
+      bodyText: primary.bodyText,
+      headline: primary.headline,
+      callToAction: primary.callToAction,
       campaignName: primaryAd?.adSet?.campaign?.name ?? null,
       adsetName: primaryAd?.adSet?.name ?? null,
       adName: primaryAd?.name ?? null,
@@ -189,6 +264,7 @@ export default async function ClientCreativesPage({ params }: PageProps) {
       launchDate,
       reviewUrl,
       daily,
+      linkedAds,
     };
   });
 

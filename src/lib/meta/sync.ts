@@ -62,6 +62,10 @@ async function upsertCreative(
     bodyText: creative.body,
     headline: creative.title,
     callToAction: creative.call_to_action_type,
+    objectStoryId: creative.object_story_id,
+    effectiveObjectStoryId: creative.effective_object_story_id,
+    imageHash: creative.image_hash,
+    videoId: creative.video_id,
     raw: creative as unknown as object,
   };
 
