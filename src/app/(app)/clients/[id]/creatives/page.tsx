@@ -214,11 +214,14 @@ export default async function ClientCreativesPage({ params }: PageProps) {
     const storyMember =
       members.find((m) => m.effectiveObjectStoryId ?? m.objectStoryId) ??
       primary;
-    const reviewUrl =
-      buildMetaPreviewUrl(
-        storyMember.effectiveObjectStoryId,
-        storyMember.objectStoryId,
-      ) ?? adReviewUrl;
+    const postPreviewUrl = buildMetaPreviewUrl(
+      storyMember.effectiveObjectStoryId,
+      storyMember.objectStoryId,
+    );
+    const reviewUrl = postPreviewUrl ?? adReviewUrl;
+    // True only when the link points at a real published post (story-id
+    // derived permalink), not the Ads Manager fallback. Drives honest labeling.
+    const hasRealPostPreview = Boolean(postPreviewUrl);
 
     // Launch date: first day with delivery if available, else creation date.
     const launchDate =
@@ -250,6 +253,7 @@ export default async function ClientCreativesPage({ params }: PageProps) {
       adPlatformId: primaryAd?.platformId ?? null,
       launchDate,
       reviewUrl,
+      hasRealPostPreview,
       daily,
       linkedAds,
     };

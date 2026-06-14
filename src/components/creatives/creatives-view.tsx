@@ -67,6 +67,7 @@ export interface CreativeItem {
   adPlatformId: string | null;
   launchDate: string | null; // ISO
   reviewUrl: string | null;
+  hasRealPostPreview: boolean;
   daily: CreativeDailyPoint[];
   linkedAds?: CreativeLinkedAd[];
 }
@@ -468,7 +469,9 @@ function CreativeDrawer({
                     target='_blank'
                     rel='noreferrer'
                     className={cn(buttonVariants({ size: "sm" }), "ml-auto")}>
-                    Review in Meta
+                    {item.hasRealPostPreview
+                      ? "Open Preview in Meta"
+                      : "Review in Meta"}
                   </a>
                 )}
               </div>
@@ -564,7 +567,9 @@ function CreativeDrawer({
                       target='_blank'
                       rel='noreferrer'
                       className={cn(buttonVariants(), "w-full")}>
-                      Review in Meta
+                      {item.hasRealPostPreview
+                        ? "Open Preview in Meta"
+                        : "Review in Meta"}
                     </a>
                   )}
                 </TabsContent>
@@ -882,7 +887,9 @@ function CreativeCard({
                 buttonVariants({ variant: "outline", size: "sm" }),
                 "w-full",
               )}>
-              Review in Meta
+              {item.hasRealPostPreview
+                ? "Open Preview in Meta"
+                : "Review in Meta"}
             </a>
           ) : (
             <button
