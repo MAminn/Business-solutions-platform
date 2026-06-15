@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { groupCreativesByAsset } from "@/lib/creatives/group-by-asset";
+import { cleanCreativeName } from "@/lib/creatives/display-name";
 import {
   CreativesView,
   type CreativeItem,
@@ -270,7 +271,11 @@ export default async function ClientCreativesPage({ params }: PageProps) {
 
     return {
       id: primary.id,
-      name: primary.name,
+      name: cleanCreativeName({
+        name: primary.name,
+        headline: primary.headline,
+        type: primary.type,
+      }),
       type: primary.type,
       status: primaryAd?.effectiveStatus ?? null,
       preview,
