@@ -12,12 +12,14 @@
  *   one accent per page, numbers right-aligned in tables.
  */
 
+import path from "node:path";
 import {
   Document,
   Page,
   Text,
   View,
   StyleSheet,
+  Font,
   renderToBuffer,
 } from "@react-pdf/renderer";
 import {
@@ -26,6 +28,27 @@ import {
   formatMultiplier,
   formatPercentRaw,
 } from "@/lib/format";
+
+// ---------------------------------------------------------------------------
+// Font registration (committed static WOFF assets — @react-pdf/renderer cannot
+// embed variable fonts). Registered once at module load. "NotoArabic" gives
+// Latin + Arabic glyph coverage so user copy renders real glyphs instead of
+// mojibake. NOTE: RTL ordering is a known MVP limitation — glyphs render, but
+// word order may come out left-to-right. Deferred, not fixed here.
+// ---------------------------------------------------------------------------
+Font.register({
+  family: "NotoArabic",
+  fonts: [
+    {
+      src: path.join(process.cwd(), "public/fonts/NotoSansArabic-Regular.woff"),
+      fontWeight: "normal",
+    },
+    {
+      src: path.join(process.cwd(), "public/fonts/NotoSansArabic-Bold.woff"),
+      fontWeight: "bold",
+    },
+  ],
+});
 
 // ---------------------------------------------------------------------------
 // Public data contract (the route builds this).
@@ -77,6 +100,21 @@ export interface CreativeReportData {
 const META_DISCLAIMER =
   "Revenue, ROAS, and CPA are Meta-reported and not reconciled against real sales.";
 
+/**
+ * Removes emoji / pictographic symbols (and their joiners, variation
+ * selectors, regional-indicator flags, and keycap combiners) from a string,
+ * collapsing any resulting double spaces. Arabic and Latin letters, digits,
+ * and normal punctuation are preserved — only emoji/symbol pictographs go.
+ */
+function stripEmoji(s: string): string {
+  return s
+    .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "") // regional indicators (flags)
+    .replace(/\p{Extended_Pictographic}/gu, "") // emoji & pictographs
+    .replace(/[\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]/gu, "") // selectors/ZWJ/keycap
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 // ---------------------------------------------------------------------------
 // Palette
 // ---------------------------------------------------------------------------
@@ -122,7 +160,7 @@ const styles = StyleSheet.create({
     paddingTop: 40,
     paddingBottom: 56,
     paddingHorizontal: 40,
-    fontFamily: "Courier",
+    fontFamily: "NotoArabic",
     fontSize: 9,
   },
 
@@ -481,7 +519,7 @@ export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
               </View>
               <View style={styles.cardBody}>
                 <View style={styles.cardHeadRow}>
-                  <Text style={styles.cardTitle}>{cr.name}</Text>
+                  <Text style={styles.cardTitle}>{stripEmoji(cr.name)}</Text>
                   <View style={styles.badgeRow}>
                     {cr.fatigued ? (
                       <Text style={styles.fatigueBadge}>Fatigue</Text>
@@ -491,10 +529,10 @@ export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
                 </View>
                 <Text style={styles.cardType}>{cr.type}</Text>
                 {cr.headline ? (
-                  <Text style={styles.cardCopy}>{cr.headline}</Text>
+                  <Text style={styles.cardCopy}>{stripEmoji(cr.headline)}</Text>
                 ) : null}
                 {cr.bodyText ? (
-                  <Text style={styles.cardCopy}>{cr.bodyText}</Text>
+                  <Text style={styles.cardCopy}>{stripEmoji(cr.bodyText)}</Text>
                 ) : null}
 
                 <View style={styles.metricStrip}>
@@ -533,7 +571,7 @@ export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
         ) : (
           fatigued.map((cr, i) => (
             <View key={i} style={styles.fatigueRow}>
-              <Text style={styles.fatigueName}>{cr.name}</Text>
+              <Text style={styles.fatigueName}>{stripEmoji(cr.name)}</Text>
               <Text style={styles.fatigueMetric}>
                 Freq {formatMultiplier(cr.frequency)} · CTR{" "}
                 {formatPercentRaw(cr.ctr)}

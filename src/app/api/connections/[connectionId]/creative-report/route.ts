@@ -37,6 +37,12 @@ const WINDOW_DAYS = 30;
 // A creative counts as "top spend-share" when it carries at least this
 // fraction of the account's total 30-day spend.
 const SCALE_MIN_SPEND_SHARE = 0.05;
+// Minimum spend (account currency, EGP for Mach) before a zero-purchase
+// creative is called a "Kill". Below this floor the spend is treated as
+// trivial wind-down and the creative falls through to Hold/Watch (or Refresh
+// if fatigued) instead. Conservative default — tune against the real spend
+// distribution once the DB is reachable.
+const KILL_MIN_SPEND = 250;
 // Minimum usable (stable) daily data points before a fatigue trend is called.
 const FATIGUE_MIN_USABLE_DAYS = 4;
 // Number of most-recent days dropped from the fatigue trend (see isFatigued).
@@ -56,6 +62,21 @@ function num(value: unknown): number {
 
 function fmtDay(value: Date): string {
   return format(value, "yyyy-MM-dd");
+}
+
+/**
+ * Display-only cleanup of a creative name: trims a trailing platform-ID token
+ * (a separator followed by a long hex/alphanumeric hash, and any date token
+ * left behind), e.g. "My Ad - 2026-05-01 - a1b2c3d4e5" -> "My Ad".
+ * Conservative: when the trailing pattern is absent the name is returned
+ * unchanged. Never mutates stored data.
+ */
+function cleanCreativeName(name: string): string {
+  const cleaned = name
+    .replace(/\s*[-–|]\s*[0-9a-f]{8,}\s*$/i, "") // trailing hex hash tail
+    .replace(/\s*[-–|]\s*\d{4}-\d{2}-\d{2}\s*$/i, "") // trailing date token
+    .trim();
+  return cleaned.length > 0 ? cleaned : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +349,7 @@ export async function GET(
       spend: agg.spend,
       roas,
       row: {
-        name: cr.name,
+        name: cleanCreativeName(cr.name),
         type: cr.type as CreativeType,
         headline: cr.headline,
         bodyText: cr.bodyText,
@@ -364,8 +385,10 @@ export async function GET(
 
   function deriveVerdict(b: Built): Verdict {
     const { row } = b;
-    // Kill: spending with zero purchases.
-    if (row.spend > 0 && row.purchases === 0) return "Kill";
+    // Kill: non-trivial spend (>= KILL_MIN_SPEND) with zero purchases.
+    // Zero-purchase creatives below the floor fall through (Hold/Watch, or
+    // Refresh if fatigued) rather than being flagged as wasted spend.
+    if (row.spend >= KILL_MIN_SPEND && row.purchases === 0) return "Kill";
     // Refresh: a fatigue trend is present.
     if (row.fatigued) return "Refresh";
     // Scale: top spend-share AND efficiency above the median of spenders.
