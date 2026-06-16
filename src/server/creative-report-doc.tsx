@@ -373,7 +373,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   note: { fontSize: 7.5, color: C.muted, marginTop: 6 },
-  empty: { fontSize: 9, color: C.muted, fontStyle: "italic" },
+  empty: { fontSize: 9, color: C.muted, fontStyle: "normal" },
 
   // Footer
   footer: {
