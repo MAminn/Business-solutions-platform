@@ -390,10 +390,10 @@ export async function GET(
   );
   for (const r of rows) verdictCounts[r.verdict] += 1;
 
-  // Spend-quality headline: share of spend on below-threshold creatives
-  // (Kill or Refresh).
+  // Spend-quality headline: share of spend wasted on Kill creatives
+  // (spending with zero purchases).
   const belowThresholdSpend = rows
-    .filter((r) => r.verdict === "Kill" || r.verdict === "Refresh")
+    .filter((r) => r.verdict === "Kill")
     .reduce((acc, r) => acc + r.spend, 0);
   const belowThresholdSpendPct =
     totalSpend > 0 ? (belowThresholdSpend / totalSpend) * 100 : 0;

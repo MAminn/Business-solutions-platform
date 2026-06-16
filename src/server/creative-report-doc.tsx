@@ -460,9 +460,9 @@ export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
             {formatPercentRaw(data.belowThresholdSpendPct)}
           </Text>
           <Text style={styles.qualityText}>
-            of 30-day spend is sitting on creatives below the efficiency
-            threshold (Kill or Refresh). The lower this number, the healthier
-            the account&apos;s creative mix.
+            of 30-day spend is wasted on Kill creatives (spending with zero
+            purchases). The lower this number, the healthier the account&apos;s
+            creative mix.
           </Text>
         </View>
 
