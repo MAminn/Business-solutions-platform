@@ -37,6 +37,12 @@ const WINDOW_DAYS = 30;
 // A creative counts as "top spend-share" when it carries at least this
 // fraction of the account's total 30-day spend.
 const SCALE_MIN_SPEND_SHARE = 0.05;
+// A creative at this many times the account-median ROAS is an efficiency
+// standout worth scaling even when it sits below the spend-share floor.
+const SCALE_ROAS_MEDIAN_MULT = 1.5;
+// Minimum purchases for the efficiency Scale path, so a single-conversion
+// blip on a high-ROAS, low-spend creative can't qualify as Scale.
+const SCALE_MIN_PURCHASES = 3;
 // Minimum spend (account currency, EGP for Mach) before a zero-purchase
 // creative is called a "Kill". Below this floor the spend is treated as
 // trivial wind-down and the creative falls through to Hold/Watch (or Refresh
@@ -394,6 +400,17 @@ export async function GET(
     // Scale: top spend-share AND efficiency above the median of spenders.
     const spendShare = totalSpend > 0 ? b.spend / totalSpend : 0;
     if (spendShare >= SCALE_MIN_SPEND_SHARE && b.roas > medianRoas) {
+      return "Scale";
+    }
+    // Scale (efficiency path): a high-efficiency, lower-spend winner — well
+    // above the account-median ROAS with enough purchases to be real, even
+    // though it sits below the spend-share floor. Guard against a zero/absent
+    // median (would make the multiple trivially clearable for everyone).
+    if (
+      medianRoas > 0 &&
+      b.roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
+      row.purchases >= SCALE_MIN_PURCHASES
+    ) {
       return "Scale";
     }
     return "Hold/Watch";
