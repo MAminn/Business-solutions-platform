@@ -1,10 +1,7 @@
 "use client";
 
 import { useFormState, useFormStatus } from "react-dom";
-import {
-  createFundingCycle,
-  type FundingFormState,
-} from "@/server/funding";
+import { createFundingCycle, type FundingFormState } from "@/server/funding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,7 +31,9 @@ export function FundingCycleForm({
     formData: FormData,
   ): Promise<FundingFormState> {
     return createFundingCycle({
-      adAccountConnectionId: String(formData.get("adAccountConnectionId") ?? ""),
+      adAccountConnectionId: String(
+        formData.get("adAccountConnectionId") ?? "",
+      ),
       amount: Number(formData.get("amount") ?? 0),
       note: String(formData.get("note") ?? ""),
     });
