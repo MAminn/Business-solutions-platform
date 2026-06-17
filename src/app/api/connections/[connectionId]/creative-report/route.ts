@@ -39,7 +39,9 @@ const WINDOW_DAYS = 30;
 const SCALE_MIN_SPEND_SHARE = 0.05;
 // A creative at this many times the account-median ROAS is an efficiency
 // standout worth scaling even when it sits below the spend-share floor.
-const SCALE_ROAS_MEDIAN_MULT = 1.5;
+// Loosened to 1.2x so genuine high-efficiency, lower-spend winners that sit
+// just above the median clear the efficiency Scale bar.
+const SCALE_ROAS_MEDIAN_MULT = 1.2;
 // Minimum purchases for the efficiency Scale path, so a single-conversion
 // blip on a high-ROAS, low-spend creative can't qualify as Scale.
 const SCALE_MIN_PURCHASES = 3;
@@ -429,6 +431,13 @@ export async function GET(
     {} as Record<Verdict, number>,
   );
   for (const r of rows) verdictCounts[r.verdict] += 1;
+
+  // TEMP DIAGNOSTIC — remove after calibration
+  console.log("[creative-report] calibration", {
+    medianRoas,
+    spenderCount: built.length,
+    verdictCounts,
+  });
 
   // Spend-quality headline: share of spend wasted on Kill creatives
   // (spending with zero purchases).
