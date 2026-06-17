@@ -451,6 +451,23 @@ export async function GET(
     verdictCounts,
   });
 
+  // TEMP DIAGNOSTIC — remove after calibration
+  console.log(
+    "[creative-report] top-roas",
+    [...rows]
+      .sort((a, b) => b.roas - a.roas)
+      .slice(0, 12)
+      .map((r) => ({
+        name: r.name,
+        roas: Math.round(r.roas * 100) / 100,
+        spend: Math.round(r.spend),
+        purchases: r.purchases,
+        spendShare:
+          Math.round((totalSpend > 0 ? r.spend / totalSpend : 0) * 1000) / 1000,
+        verdict: r.verdict,
+      })),
+  );
+
   // Spend-quality headline: share of spend wasted on Kill creatives
   // (spending with zero purchases).
   const belowThresholdSpend = rows
