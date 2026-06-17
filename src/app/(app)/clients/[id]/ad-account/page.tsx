@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import type { ConnectionStatus } from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -12,6 +12,9 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { GenerateDigestButton } from "@/components/integrations/generate-digest-button";
+import { FundingCycleForm } from "@/components/funding/funding-cycle-form";
+import { listFundingCycles, type FundingCycleListItem } from "@/server/funding";
+import { formatCurrencyExact } from "@/lib/format";
 import { previousCompletedMonth } from "@/lib/month";
 
 interface PageProps {
@@ -83,6 +86,13 @@ export default async function AdAccountPage({ params }: PageProps) {
     },
     orderBy: { createdAt: "asc" },
   });
+
+  const fundingByConnection = new Map<string, FundingCycleListItem[]>();
+  await Promise.all(
+    connections.map(async (conn) => {
+      fundingByConnection.set(conn.id, await listFundingCycles(conn.id));
+    }),
+  );
 
   const prevMonth = previousCompletedMonth();
 
@@ -201,6 +211,70 @@ export default async function AdAccountPage({ params }: PageProps) {
                       </a>
                     </Button>
                   </div>
+
+                  {(() => {
+                    const cycles = fundingByConnection.get(conn.id) ?? [];
+                    const active = cycles[0];
+                    return (
+                      <div className='space-y-3 border-t border-border/60 pt-3'>
+                        <h3 className='text-sm font-medium'>Funding</h3>
+                        {cycles.length === 0 ? (
+                          <p className='text-xs text-muted-foreground'>
+                            No funding cycle logged yet.
+                          </p>
+                        ) : (
+                          <div className='space-y-3'>
+                            <div className='space-y-0.5'>
+                              <p className='text-xs text-muted-foreground'>
+                                Current cycle
+                              </p>
+                              <p className='text-sm font-semibold'>
+                                {formatCurrencyExact(
+                                  active.amount,
+                                  active.currency,
+                                )}
+                              </p>
+                              <p className='text-xs text-muted-foreground'>
+                                Started{" "}
+                                {formatDistanceToNow(active.startedAt, {
+                                  addSuffix: true,
+                                })}
+                                {active.note ? ` · ${active.note}` : ""}
+                              </p>
+                            </div>
+                            {cycles.length > 1 && (
+                              <div className='space-y-1'>
+                                <p className='text-xs text-muted-foreground'>
+                                  History
+                                </p>
+                                <ul className='space-y-1'>
+                                  {cycles.slice(1).map((cycle) => (
+                                    <li
+                                      key={cycle.id}
+                                      className='flex items-center justify-between gap-3 text-xs text-muted-foreground'>
+                                      <span>
+                                        {formatCurrencyExact(
+                                          cycle.amount,
+                                          cycle.currency,
+                                        )}
+                                      </span>
+                                      <span>
+                                        {format(cycle.startedAt, "MMM d, yyyy")}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <FundingCycleForm
+                          adAccountConnectionId={conn.id}
+                          currency={conn.currency}
+                        />
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             );
