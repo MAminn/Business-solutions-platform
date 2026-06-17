@@ -188,6 +188,13 @@ export default async function AdAccountPage({ params }: PageProps) {
                     </Button>
                     <Button asChild size='sm' variant='outline'>
                       <a
+                        href={`/api/connections/${conn.id}/creative-report`}
+                        download>
+                        Export PDF Report
+                      </a>
+                    </Button>
+                    <Button asChild size='sm' variant='outline'>
+                      <a
                         href={`/api/connections/${conn.id}/creative-bundle?year=${prevMonth.year}&month=${prevMonth.month}`}
                         download>
                         Creative bundle (previous month)
