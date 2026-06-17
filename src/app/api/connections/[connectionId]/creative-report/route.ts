@@ -380,8 +380,20 @@ export async function GET(
 
   // --- Verdict derivation --------------------------------------------------
   const totalSpend = built.reduce((acc, b) => acc + b.spend, 0);
-  // Median ROAS across spenders → "efficiency above the median".
-  const roasSorted = built.map((b) => b.roas).sort((a, b) => a - b);
+  // Median ROAS across positive-ROAS spenders only → "typical performance
+  // among creatives that are actually converting".
+  // Zero-ROAS creatives (spend with no attributed conversion value) are
+  // excluded on purpose: they are the population we're trying to separate
+  // out, not a performance baseline. Including them — e.g. in a quiet
+  // wind-down window where most creatives have ROAS 0 — drags the median to
+  // exactly 0, which makes the SCALE_ROAS_MEDIAN_MULT multiplier meaningless
+  // (roas >= 0 * 1.2 ≡ roas >= 0) and trips the medianRoas > 0 guard so the
+  // efficiency Scale path never fires. If the positive subset is empty,
+  // medianRoas stays 0 and that guard correctly disables the efficiency path.
+  const roasSorted = built
+    .map((b) => b.roas)
+    .filter((roas) => roas > 0)
+    .sort((a, b) => a - b);
   const medianRoas =
     roasSorted.length === 0
       ? 0
