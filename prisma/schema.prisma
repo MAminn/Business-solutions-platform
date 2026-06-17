@@ -288,11 +288,42 @@ model AdAccountConnection {
   campaigns      Campaign[]
   creatives      Creative[]
   syncJobs       SyncJob[]
+  fundingCycles  FundingCycle[]
 
   @@unique([platform, platformAccountId])
   @@index([clientId])
   @@index([status])
   @@index([metaAppProfileId])
+}
+
+// ============================================================================
+// FUNDING CYCLES (manual funding-cycle tracking + email-dedupe)
+// ============================================================================
+
+model FundingCycle {
+  id                    String   @id @default(cuid())
+  adAccountConnectionId String
+  amount                Decimal  @db.Decimal(12, 2)
+  currency              String
+  startedAt             DateTime @default(now())
+  note                  String?
+  createdAt             DateTime @default(now())
+
+  adAccountConnection AdAccountConnection @relation(fields: [adAccountConnectionId], references: [id], onDelete: Cascade)
+  alertsSent          FundAlertSent[]
+
+  @@index([adAccountConnectionId, startedAt])
+}
+
+model FundAlertSent {
+  id             String   @id @default(cuid())
+  fundingCycleId String
+  threshold      Int // 50, 75, 90, 100
+  sentAt         DateTime @default(now())
+
+  fundingCycle FundingCycle @relation(fields: [fundingCycleId], references: [id], onDelete: Cascade)
+
+  @@unique([fundingCycleId, threshold])
 }
 
 // ============================================================================
