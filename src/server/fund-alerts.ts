@@ -89,7 +89,7 @@ async function loadCycleSpend(
   adAccountConnectionId: string,
 ): Promise<CycleSpendOutcome> {
   const cycle = await db.fundingCycle.findFirst({
-    where: { adAccountConnectionId },
+    where: { adAccountConnectionId, cancelledAt: null },
     orderBy: { startedAt: "desc" },
     select: { id: true, amount: true, currency: true, startedAt: true },
   });

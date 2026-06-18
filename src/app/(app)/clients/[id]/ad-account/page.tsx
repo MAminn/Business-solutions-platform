@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { GenerateDigestButton } from "@/components/integrations/generate-digest-button";
 import { FundingCycleForm } from "@/components/funding/funding-cycle-form";
+import { FundingCancelButton } from "@/components/funding/funding-cancel-button";
 import { listFundingCycles, type FundingCycleListItem } from "@/server/funding";
 import { formatCurrencyExact } from "@/lib/format";
 import { previousCompletedMonth } from "@/lib/month";
@@ -214,7 +215,8 @@ export default async function AdAccountPage({ params }: PageProps) {
 
                   {(() => {
                     const cycles = fundingByConnection.get(conn.id) ?? [];
-                    const active = cycles[0];
+                    const active = cycles.find((c) => c.isActive);
+                    const others = cycles.filter((c) => c.id !== active?.id);
                     return (
                       <div className='space-y-3 border-t border-border/60 pt-3'>
                         <h3 className='text-sm font-medium'>Funding</h3>
@@ -224,45 +226,77 @@ export default async function AdAccountPage({ params }: PageProps) {
                           </p>
                         ) : (
                           <div className='space-y-3'>
-                            <div className='space-y-0.5'>
+                            {active ? (
+                              <div className='space-y-1'>
+                                <p className='text-xs text-muted-foreground'>
+                                  Current cycle
+                                </p>
+                                <p className='text-sm font-semibold'>
+                                  {formatCurrencyExact(
+                                    active.amount,
+                                    active.currency,
+                                  )}
+                                </p>
+                                <p className='text-xs text-muted-foreground'>
+                                  Started{" "}
+                                  {formatDistanceToNow(active.startedAt, {
+                                    addSuffix: true,
+                                  })}
+                                  {active.note ? ` · ${active.note}` : ""}
+                                </p>
+                                <div className='pt-1'>
+                                  <FundingCancelButton
+                                    fundingCycleId={active.id}
+                                  />
+                                </div>
+                              </div>
+                            ) : (
                               <p className='text-xs text-muted-foreground'>
-                                Current cycle
+                                No active funding cycle.
                               </p>
-                              <p className='text-sm font-semibold'>
-                                {formatCurrencyExact(
-                                  active.amount,
-                                  active.currency,
-                                )}
-                              </p>
-                              <p className='text-xs text-muted-foreground'>
-                                Started{" "}
-                                {formatDistanceToNow(active.startedAt, {
-                                  addSuffix: true,
-                                })}
-                                {active.note ? ` · ${active.note}` : ""}
-                              </p>
-                            </div>
-                            {cycles.length > 1 && (
+                            )}
+                            {others.length > 0 && (
                               <div className='space-y-1'>
                                 <p className='text-xs text-muted-foreground'>
                                   History
                                 </p>
-                                <ul className='space-y-1'>
-                                  {cycles.slice(1).map((cycle) => (
-                                    <li
-                                      key={cycle.id}
-                                      className='flex items-center justify-between gap-3 text-xs text-muted-foreground'>
-                                      <span>
-                                        {formatCurrencyExact(
-                                          cycle.amount,
-                                          cycle.currency,
-                                        )}
-                                      </span>
-                                      <span>
-                                        {format(cycle.startedAt, "MMM d, yyyy")}
-                                      </span>
-                                    </li>
-                                  ))}
+                                <ul className='space-y-1.5'>
+                                  {others.map((cycle) => {
+                                    const isCancelled =
+                                      cycle.cancelledAt !== null;
+                                    return (
+                                      <li
+                                        key={cycle.id}
+                                        className={`flex items-center justify-between gap-3 text-xs ${isCancelled ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
+                                        <span className='flex items-center gap-2'>
+                                          <span>
+                                            {formatCurrencyExact(
+                                              cycle.amount,
+                                              cycle.currency,
+                                            )}
+                                          </span>
+                                          {isCancelled && (
+                                            <Badge variant='muted'>
+                                              Cancelled
+                                            </Badge>
+                                          )}
+                                        </span>
+                                        <span className='flex items-center gap-3'>
+                                          <span>
+                                            {format(
+                                              cycle.startedAt,
+                                              "MMM d, yyyy",
+                                            )}
+                                          </span>
+                                          {!isCancelled && (
+                                            <FundingCancelButton
+                                              fundingCycleId={cycle.id}
+                                            />
+                                          )}
+                                        </span>
+                                      </li>
+                                    );
+                                  })}
                                 </ul>
                               </div>
                             )}

@@ -40,7 +40,12 @@ const createFundingCycleSchema = z.object({
     .transform((v) => (v && v.length > 0 ? v : undefined)),
 });
 
+const cancelFundingCycleSchema = z.object({
+  fundingCycleId: z.string().min(1, "Funding cycle is required"),
+});
+
 export type CreateFundingCycleInput = z.input<typeof createFundingCycleSchema>;
+export type CancelFundingCycleInput = z.input<typeof cancelFundingCycleSchema>;
 
 export type FundingFormErrorKey =
   | "adAccountConnectionId"
@@ -59,7 +64,18 @@ export interface FundingCycleListItem {
   currency: string;
   startedAt: Date;
   note: string | null;
+  cancelledAt: Date | null;
   isActive: boolean;
+}
+
+/**
+ * Index of the active cycle: the most recent (rows are startedAt desc) whose
+ * cancelledAt is null. Returns -1 when every cycle is cancelled (none active).
+ * Pure. Kept module-private because this is a "use server" file (only async
+ * functions may be exported).
+ */
+function activeCycleIndex(cycles: { cancelledAt: Date | null }[]): number {
+  return cycles.findIndex((c) => c.cancelledAt === null);
 }
 
 export async function createFundingCycle(
@@ -120,6 +136,60 @@ export async function createFundingCycle(
   return { message: "Funding cycle logged" };
 }
 
+export async function cancelFundingCycle(
+  input: CancelFundingCycleInput,
+): Promise<FundingFormState> {
+  const user = await requireUser();
+
+  const parsed = cancelFundingCycleSchema.safeParse(input);
+  if (!parsed.success) {
+    return { errors: { _form: ["Invalid funding cycle"] } };
+  }
+
+  const cycle = await db.fundingCycle.findUnique({
+    where: { id: parsed.data.fundingCycleId },
+    select: {
+      id: true,
+      cancelledAt: true,
+      adAccountConnectionId: true,
+      adAccountConnection: { select: { clientId: true } },
+    },
+  });
+  if (!cycle || !cycle.adAccountConnection) {
+    return { errors: { _form: ["Funding cycle not found"] } };
+  }
+
+  const clientId = cycle.adAccountConnection.clientId;
+  await assertAccessToClient(user, clientId);
+
+  // Idempotent: an already-cancelled cycle is a no-op success; never overwrite
+  // the original timestamp.
+  if (cycle.cancelledAt !== null) {
+    return { message: "Funding cycle cancelled" };
+  }
+
+  await db.fundingCycle.update({
+    where: { id: cycle.id },
+    data: { cancelledAt: new Date() },
+  });
+
+  const organizationId = await getOrgIdForUser(user.id);
+  await writeAudit({
+    userId: user.id,
+    organizationId,
+    action: "funding_cycle.cancel",
+    entityType: "FundingCycle",
+    entityId: cycle.id,
+    metadata: {
+      adAccountConnectionId: cycle.adAccountConnectionId,
+      clientId,
+    },
+  });
+
+  revalidatePath(`/clients/${clientId}/ad-account`);
+  return { message: "Funding cycle cancelled" };
+}
+
 export async function listFundingCycles(
   adAccountConnectionId: string,
 ): Promise<FundingCycleListItem[]> {
@@ -142,8 +212,13 @@ export async function listFundingCycles(
       currency: true,
       startedAt: true,
       note: true,
+      cancelledAt: true,
     },
   });
+
+  // Active = most recent non-cancelled cycle (rows are startedAt desc), not
+  // simply index 0, since index 0 could itself be cancelled.
+  const activeIdx = activeCycleIndex(cycles);
 
   return cycles.map((cycle, index) => ({
     id: cycle.id,
@@ -151,6 +226,7 @@ export async function listFundingCycles(
     currency: cycle.currency,
     startedAt: cycle.startedAt,
     note: cycle.note,
-    isActive: index === 0,
+    cancelledAt: cycle.cancelledAt,
+    isActive: index === activeIdx,
   }));
 }
