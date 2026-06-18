@@ -66,6 +66,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Run mode (B3.1): "full" runs structural + insights + fund alerts; "insights"
+  // skips structural and runs only insights + fund alerts (structural is
+  // daily-enough and wasteful at the 3-hourly cadence). Anything absent or
+  // unrecognized falls back to "full" for backward compatibility.
+  const requestedMode = req.nextUrl.searchParams.get("mode");
+  const runMode: "full" | "insights" =
+    requestedMode === "insights" ? "insights" : "full";
+
   const connections = await db.adAccountConnection.findMany({
     where: {
       status: ConnectionStatus.ACTIVE,
@@ -86,7 +94,9 @@ export async function GET(req: NextRequest) {
   for (const conn of connections) {
     const connectionId = conn.id;
     const mode = conn.insightsBackfilledAt === null ? "initial" : "incremental";
-    console.log(`[sync-all] start connectionId=${connectionId} mode=${mode}`);
+    console.log(
+      `[sync-all] start connectionId=${connectionId} runMode=${runMode} insightsMode=${mode}`,
+    );
 
     try {
       // (a) Token-expiry check — non-fatal. Warn when expiring soon / already
@@ -101,8 +111,10 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      // (b) Structural sync.
-      await syncStructural(connectionId);
+      // (b) Structural sync — skipped in "insights" run mode.
+      if (runMode === "full") {
+        await syncStructural(connectionId);
+      }
 
       // (c) Insights sync — backfill until it has ever succeeded, else
       // incremental. Mirrors the manual server action's mode decision.
@@ -148,11 +160,12 @@ export async function GET(req: NextRequest) {
   const failed = results.filter((r) => r.status === "failed").length;
 
   console.log(
-    `[sync-all] done total=${results.length} synced=${synced} skipped=${skipped} failed=${failed}`,
+    `[sync-all] mode=${runMode} done total=${results.length} synced=${synced} skipped=${skipped} failed=${failed}`,
   );
 
   return NextResponse.json({
     ok: true,
+    mode: runMode,
     total: results.length,
     synced,
     skipped,
