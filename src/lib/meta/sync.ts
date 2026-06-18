@@ -115,11 +115,78 @@ export async function getMetaClient(connectionId: string): Promise<{
   };
 }
 
+/**
+ * Sentinel returned by runJob when a *fresh* RUNNING job of the same
+ * (connection, type) already exists, so this run was skipped as a no-op.
+ *
+ * Why a sentinel and not a thrown error: the three sync entry points
+ * (syncStructural / syncInsightsIncremental / syncInsightsBackfill) await
+ * runJob and ignore its return value (they resolve to void), so widening the
+ * return type here changes no caller behaviour and the success path still
+ * returns `result` unchanged. Throwing instead would surface to the server
+ * action's catch block (src/server/sync.ts) and write a misleading
+ * `connection.sync_failed` audit — a SKIP is a no-op, not a failure.
+ */
+export const SYNC_SKIPPED = Symbol("sync-skipped");
+
 async function runJob<T>(
   connectionId: string,
   type: SyncJobType,
   fn: () => Promise<{ recordsSynced: number; result: T }>,
-): Promise<T> {
+): Promise<T | typeof SYNC_SKIPPED> {
+  // ---- Overlap guard ----------------------------------------------------
+  // Prevent a second sync of the same (connection, type) from starting while
+  // one is already RUNNING. This mirrors the creative-ingestion worker's
+  // stale-RUNNING reclaim (scripts/run-ingestion-worker.ts): a RUNNING job
+  // left untouched past the staleness threshold is treated as abandoned and
+  // reclaimed, while a fresh RUNNING job means a real run is in progress.
+  //
+  // Residual race: this check-then-create is intentionally NOT atomic and
+  // SyncJob has no unique constraint on (connection, type, status), so two
+  // near-simultaneous callers could both pass the check. That is acceptable
+  // for this internal tool — the real serialization guarantee will come from
+  // the single cron scheduler (a later step) which processes connections
+  // sequentially. We deliberately do NOT add advisory locks / Redis here.
+  const STALE_RUNNING_MS = 10 * 60 * 1000; // 10 min — same threshold the
+  // ingestion worker uses to reclaim stranded RUNNING jobs.
+  const existingRunning = await db.syncJob.findFirst({
+    where: {
+      adAccountConnectionId: connectionId,
+      type,
+      status: SyncJobStatus.RUNNING,
+    },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, startedAt: true },
+  });
+
+  if (existingRunning) {
+    const isStale =
+      existingRunning.startedAt === null ||
+      existingRunning.startedAt.getTime() < Date.now() - STALE_RUNNING_MS;
+    if (!isStale) {
+      // Fresh RUNNING job — skip as a no-op. Do NOT create a second job, do
+      // NOT call fn(), do NOT mark anything failed or write an audit.
+      console.log(
+        `[sync] skipped ${type} for ${connectionId}: a run is already in progress`,
+      );
+      return SYNC_SKIPPED;
+    }
+    // Stale RUNNING job — treat as abandoned. Mark it FAILED with a clear
+    // reason (do NOT delete the row), then proceed to start a fresh run.
+    await db.syncJob.update({
+      where: { id: existingRunning.id },
+      data: {
+        status: SyncJobStatus.FAILED,
+        errorMessage:
+          "ABANDONED: job left RUNNING beyond staleness threshold; reclaimed by a new run",
+        completedAt: new Date(),
+      },
+    });
+    console.warn(
+      `[sync] reclaimed stale RUNNING ${type} job ${existingRunning.id} for ${connectionId}`,
+    );
+  }
+
   const job = await db.syncJob.create({
     data: {
       adAccountConnectionId: connectionId,
