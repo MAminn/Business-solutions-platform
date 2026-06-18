@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { writeAudit } from "@/server/audit";
+import { processFundAlertsForConnection } from "@/server/fund-alerts";
 import {
   syncStructural,
   syncInsightsIncremental,
@@ -121,6 +122,17 @@ export async function syncConnectionNow(input: {
   revalidatePath(`/clients/${conn.clientId}/creatives`);
   revalidatePath(`/clients/${conn.clientId}`);
   revalidatePath("/dashboard");
+
+  // A5: fund-spend threshold alerts. Runs AFTER a successful sync only (never
+  // in the failure path above). Guarded so any error here is logged but never
+  // fails or rolls back the sync result — sync still returns ok:true.
+  try {
+    await processFundAlertsForConnection(conn.id);
+  } catch (err) {
+    console.error(
+      `[fund-alerts] processing failed after sync; sync result unaffected connectionId=${conn.id} error=${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   return { ok: true, mode };
 }
