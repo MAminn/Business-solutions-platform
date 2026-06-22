@@ -6,7 +6,7 @@ import {
   Users,
   Sparkles,
 } from "lucide-react";
-import { subDays, startOfMonth } from "date-fns";
+import { subDays, startOfMonth, differenceInDays } from "date-fns";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
@@ -16,12 +16,14 @@ export const dynamic = "force-dynamic";
 import { SpendRoasChart } from "@/components/dashboard/spend-roas-chart";
 import { UrgentTasks } from "@/components/dashboard/urgent-tasks";
 import { ActiveClients } from "@/components/dashboard/active-clients";
+import { FlagsPanel } from "@/components/dashboard/flags-panel";
+import { buildFlags, type DashboardFlagClient } from "@/lib/dashboard-flags";
 import {
   formatCurrencyCompact,
   formatMultiplier,
   formatDelta,
 } from "@/lib/format";
-import type { TaskPriority, ClientHealth, ClientStatus } from "@prisma/client";
+import type { TaskPriority, ClientHealth } from "@prisma/client";
 
 const priorityWeight: Record<TaskPriority, number> = {
   URGENT: 4,
@@ -82,6 +84,8 @@ export default async function DashboardPage() {
     winningLast14,
     urgentTasksRaw,
     clientsForList,
+    connectionsFreshness,
+    latestDataByCampaign,
   ] = await Promise.all([
     db.insightsDaily.aggregate({
       where: {
@@ -163,8 +167,21 @@ export default async function DashboardPage() {
         health: true,
         status: true,
         monthlyBudget: true,
+        minRoas: true,
       },
       orderBy: { name: "asc" },
+    }),
+    db.adAccountConnection.findMany({
+      where: { clientId: { in: accessibleClientIds } },
+      select: { clientId: true, insightsBackfilledAt: true },
+    }),
+    db.insightsDaily.groupBy({
+      by: ["entityId"],
+      where: {
+        entityType: "CAMPAIGN",
+        entityId: { in: campaignIds },
+      },
+      _max: { date: true },
     }),
   ]);
 
@@ -208,6 +225,43 @@ export default async function DashboardPage() {
     last30ByClient.set(clientId, cur);
   }
 
+  // ---- Data freshness (per client) --------------------------------------
+  const FRESH_DAYS = 3;
+  const backfilledByClient = new Map<string, Date | null>();
+  for (const conn of connectionsFreshness) {
+    // A client counts as backfilled if ANY of its connections has completed a
+    // full insights backfill; only fully-null clients are treated as missing.
+    if (conn.insightsBackfilledAt) {
+      const existing = backfilledByClient.get(conn.clientId) ?? null;
+      if (!existing || conn.insightsBackfilledAt > existing) {
+        backfilledByClient.set(conn.clientId, conn.insightsBackfilledAt);
+      }
+    } else if (!backfilledByClient.has(conn.clientId)) {
+      backfilledByClient.set(conn.clientId, null);
+    }
+  }
+  const latestDateByClient = new Map<string, Date>();
+  for (const row of latestDataByCampaign) {
+    const clientId = campaignToClient.get(row.entityId);
+    const d = row._max.date;
+    if (!clientId || !d) continue;
+    const existing = latestDateByClient.get(clientId);
+    if (!existing || d > existing) latestDateByClient.set(clientId, d);
+  }
+  function clientFreshness(clientId: string): {
+    isStale: boolean;
+    staleDays: number | null;
+  } {
+    const backfilledAt = backfilledByClient.get(clientId) ?? null;
+    const latest = latestDateByClient.get(clientId) ?? null;
+    const staleDays = latest ? differenceInDays(now, latest) : null;
+    const isStale =
+      backfilledAt == null ||
+      latest == null ||
+      (staleDays != null && staleDays > FRESH_DAYS);
+    return { isStale, staleDays };
+  }
+
   const activeClientsList: Array<{
     id: string;
     name: string;
@@ -215,25 +269,37 @@ export default async function DashboardPage() {
     health: ClientHealth;
     pacing: number;
     roas: number;
-  }> = clientsForList
-    .filter(
-      (c): c is typeof c & { status: ClientStatus } => c.status === "ACTIVE",
-    )
-    .map((c) => {
-      const budget = num(c.monthlyBudget);
-      const mtd = mtdByClient.get(c.id) ?? 0;
-      const pacing = budget > 0 ? Math.round((mtd / budget) * 100) : 0;
-      const r = last30ByClient.get(c.id);
-      const roas = r && r.spend > 0 ? r.conv / r.spend : 0;
-      return {
-        id: c.id,
-        name: c.name,
-        industry: c.industry,
-        health: c.health,
-        pacing,
-        roas,
-      };
+    isStale: boolean;
+  }> = [];
+  const flagClients: DashboardFlagClient[] = [];
+  for (const c of clientsForList) {
+    if (c.status !== "ACTIVE") continue;
+    const budget = num(c.monthlyBudget);
+    const mtd = mtdByClient.get(c.id) ?? 0;
+    const pacing = budget > 0 ? Math.round((mtd / budget) * 100) : 0;
+    const r = last30ByClient.get(c.id);
+    const roas = r && r.spend > 0 ? r.conv / r.spend : 0;
+    const { isStale, staleDays } = clientFreshness(c.id);
+    activeClientsList.push({
+      id: c.id,
+      name: c.name,
+      industry: c.industry,
+      health: c.health,
+      pacing,
+      roas,
+      isStale,
     });
+    flagClients.push({
+      clientId: c.id,
+      clientName: c.name,
+      isStale,
+      staleDays,
+      pacing,
+      roas,
+      minRoas: c.minRoas != null ? num(c.minRoas) : null,
+    });
+  }
+  const flags = buildFlags(flagClients);
 
   // ---- Urgent tasks (sorted by priority weight, top 5) ------------------
   const urgentTasks = urgentTasksRaw
@@ -282,6 +348,9 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      {/* Flags strip — decision layer */}
+      <FlagsPanel flags={flags} />
+
       {/* KPI grid */}
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'>
         <KpiCard
@@ -297,6 +366,7 @@ export default async function DashboardPage() {
         <KpiCard
           label='Average ROAS'
           value={formatMultiplier(roas30)}
+          caption='Meta-reported'
           delta={{
             value: formatDelta(roasDeltaPct),
             label: "vs prev 30d",
