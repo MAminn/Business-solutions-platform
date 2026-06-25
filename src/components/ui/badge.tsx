@@ -7,36 +7,49 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-secondary text-secondary-foreground border border-border/60",
+        default:
+          "bg-secondary text-secondary-foreground border border-border/60",
         outline: "border border-border text-foreground",
-        success: "bg-success/15 text-emerald-400 border border-emerald-500/20",
-        info: "bg-info/15 text-cyan-400 border border-cyan-500/20",
-        warning: "bg-warning/15 text-amber-400 border border-amber-500/20",
-        destructive: "bg-destructive/15 text-red-400 border border-red-500/20",
+        success: "bg-success/15 text-success border border-success/20",
+        info: "bg-info/15 text-info border border-info/20",
+        warning: "bg-warning/15 text-warning border border-warning/20",
+        destructive:
+          "bg-destructive/15 text-destructive border border-destructive/20",
         muted: "bg-muted text-muted-foreground border border-border/60",
       },
     },
     defaultVariants: { variant: "default" },
-  }
+  },
 );
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLSpanElement>,
+  extends
+    React.HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {
   withDot?: boolean;
 }
 
-export function Badge({ className, variant, withDot, children, ...props }: BadgeProps) {
+export function Badge({
+  className,
+  variant,
+  withDot,
+  children,
+  ...props
+}: BadgeProps) {
   return (
     <span className={cn(badgeVariants({ variant }), className)} {...props}>
       {withDot && (
         <span
           className={cn("h-1.5 w-1.5 rounded-full", {
-            "bg-emerald-400": variant === "success",
-            "bg-cyan-400": variant === "info",
-            "bg-amber-400": variant === "warning",
-            "bg-red-400": variant === "destructive",
-            "bg-muted-foreground": !variant || variant === "default" || variant === "muted" || variant === "outline",
+            "bg-success": variant === "success",
+            "bg-info": variant === "info",
+            "bg-warning": variant === "warning",
+            "bg-destructive": variant === "destructive",
+            "bg-muted-foreground":
+              !variant ||
+              variant === "default" ||
+              variant === "muted" ||
+              variant === "outline",
           })}
         />
       )}

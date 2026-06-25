@@ -10,18 +10,25 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Mediabuyer OS",
-  description: "Internal operating system for a Meta-focused media buying agency.",
+  title: "Loopa",
+  description:
+    "Loopa — internal Meta media-buying operating system for the agency.",
 };
 
 const isClerkConfigured = Boolean(
-  process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+  process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
 );
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const body = (
-    <html lang="en" className="dark">
-      <body className={`${inter.variable} font-sans antialiased`}>{children}</body>
+    <html lang='en' className='dark'>
+      <body className={`${inter.variable} font-sans antialiased`}>
+        {children}
+      </body>
     </html>
   );
 

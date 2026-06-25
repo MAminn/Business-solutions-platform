@@ -32,8 +32,8 @@ const paceStyle: Record<
   PaceState,
   { indicator: string; text: string; label: string }
 > = {
-  over: { indicator: "bg-warning", text: "text-amber-400", label: "Over pace" },
-  under: { indicator: "bg-info", text: "text-cyan-400", label: "Under pace" },
+  over: { indicator: "bg-warning", text: "text-warning", label: "Over pace" },
+  under: { indicator: "bg-info", text: "text-info", label: "Under pace" },
   stalled: {
     indicator: "bg-muted-foreground",
     text: "text-muted-foreground",
@@ -41,7 +41,7 @@ const paceStyle: Record<
   },
   healthy: {
     indicator: "bg-success",
-    text: "text-emerald-400",
+    text: "text-success",
     label: "On pace",
   },
   stale: {

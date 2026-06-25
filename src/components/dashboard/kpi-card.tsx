@@ -39,8 +39,8 @@ export function KpiCard({
             className={cn(
               "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 font-medium tabular-nums",
               delta.positive
-                ? "bg-emerald-500/10 text-emerald-400"
-                : "bg-red-500/10 text-red-400",
+                ? "bg-success/10 text-success"
+                : "bg-destructive/10 text-destructive",
             )}>
             {delta.positive ? (
               <ArrowUpRight className='h-3 w-3' />

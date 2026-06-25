@@ -4,27 +4,27 @@
 
 @layer base {
   :root {
-    /* Dark mode is the default — matches the screenshot aesthetic */
-    --background: 0 0% 4%;            /* page bg */
-    --foreground: 0 0% 98%;
+    /* Loopa brand — Bold Blackout base, Bone Cream text, Loop Blue primary */
+    --background: 240 9% 4%; /* Bold Blackout #0A0A0C */
+    --foreground: 44 43% 93%; /* Bone Cream #F5F1E6 */
 
-    --card: 0 0% 7%;                  /* card bg */
-    --card-foreground: 0 0% 98%;
+    --card: 240 5% 7%; /* lifted blackout #121214 */
+    --card-foreground: 44 43% 93%; /* Bone Cream #F5F1E6 */
 
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 98%;
+    --popover: 240 4% 9%; /* #161618 */
+    --popover-foreground: 44 43% 93%; /* Bone Cream */
 
-    --primary: 224 84% 64%;           /* the bright blue accent */
-    --primary-foreground: 0 0% 100%;
+    --primary: 228 100% 55%; /* Loop Blue #1B47FF */
+    --primary-foreground: 44 43% 93%; /* Bone Cream #F5F1E6 */
 
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 98%;
+    --secondary: 240 7% 12%; /* dark neutral surface #1C1C20 */
+    --secondary-foreground: 44 43% 93%; /* Bone Cream */
 
-    --muted: 0 0% 10%;
-    --muted-foreground: 0 0% 60%;
+    --muted: 240 4% 9%; /* #161618 */
+    --muted-foreground: 44 7% 57%; /* muted bone #9A968B */
 
-    --accent: 0 0% 12%;
-    --accent-foreground: 0 0% 98%;
+    --accent: 76 100% 59%; /* Voltage Lime #C8FF2E */
+    --accent-foreground: 240 9% 4%; /* Bold Blackout #0A0A0C */
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
@@ -38,9 +38,9 @@
     --info: 199 89% 48%;
     --info-foreground: 0 0% 100%;
 
-    --border: 0 0% 14%;
-    --input: 0 0% 14%;
-    --ring: 224 84% 64%;
+    --border: 240 6% 16%; /* #26262B */
+    --input: 240 6% 16%; /* #26262B */
+    --ring: 225 100% 59%; /* Electric Blue #2E63FF */
 
     --radius: 0.75rem;
   }
@@ -52,7 +52,9 @@
 }
 
 @layer base {
-  * { @apply border-border; }
+  * {
+    @apply border-border;
+  }
   html {
     color-scheme: dark;
     -webkit-font-smoothing: antialiased;
@@ -60,7 +62,9 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
   }
 }
 
@@ -73,7 +77,11 @@
 
   /* subtle dotted grid for empty states */
   .bg-dot-grid {
-    background-image: radial-gradient(circle, hsl(0 0% 20%) 1px, transparent 1px);
+    background-image: radial-gradient(
+      circle,
+      hsl(0 0% 20%) 1px,
+      transparent 1px
+    );
     background-size: 16px 16px;
   }
 }
@@ -92,7 +100,17 @@
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(0 0% 22%); }
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(0 0% 22%);
+}
