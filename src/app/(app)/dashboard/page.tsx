@@ -18,6 +18,7 @@ import { UrgentTasks } from "@/components/dashboard/urgent-tasks";
 import { ActiveClients } from "@/components/dashboard/active-clients";
 import { FlagsPanel } from "@/components/dashboard/flags-panel";
 import { buildFlags, type DashboardFlagClient } from "@/lib/dashboard-flags";
+import { groupCreativesByAsset } from "@/lib/creatives/group-by-asset";
 import {
   formatCurrencyCompact,
   formatMultiplier,
@@ -51,8 +52,6 @@ export default async function DashboardPage() {
   const now = new Date();
   const d30 = subDays(now, 30);
   const d60 = subDays(now, 60);
-  const d90 = subDays(now, 90);
-  const d14 = subDays(now, 14);
   const monthStart = startOfMonth(now);
 
   // Resolve campaigns under accessible clients (used as the join key for
@@ -78,10 +77,7 @@ export default async function DashboardPage() {
     sumByCampaign30,
     sumByCampaignMtd,
     dailySeries,
-    activeCount,
-    activeOlderThan90,
-    winningTotal,
-    winningLast14,
+    creativesForWinners,
     urgentTasksRaw,
     clientsForList,
     connectionsFreshness,
@@ -131,27 +127,21 @@ export default async function DashboardPage() {
       _sum: { spend: true },
       orderBy: { date: "asc" },
     }),
-    db.client.count({
-      where: { id: { in: accessibleClientIds }, status: "ACTIVE" },
-    }),
-    db.client.count({
-      where: {
-        id: { in: accessibleClientIds },
-        status: "ACTIVE",
-        createdAt: { lt: d90 },
-      },
-    }),
-    db.creative.count({
+    // Creatives (with asset-identity fields + ads) across accessible clients,
+    // used to derive the live Winning Creatives count by grouped asset.
+    db.creative.findMany({
       where: {
         adAccountConnection: { clientId: { in: accessibleClientIds } },
-        isWinner: true,
       },
-    }),
-    db.creative.count({
-      where: {
-        adAccountConnection: { clientId: { in: accessibleClientIds } },
-        isWinner: true,
-        createdAt: { gte: d14 },
+      select: {
+        id: true,
+        effectiveObjectStoryId: true,
+        objectStoryId: true,
+        videoId: true,
+        imageHash: true,
+        imageUrl: true,
+        adAccountConnection: { select: { clientId: true } },
+        ads: { select: { id: true } },
       },
     }),
     db.task.findMany({
@@ -199,12 +189,6 @@ export default async function DashboardPage() {
   const roasDeltaPct =
     roasPrev > 0 ? ((roas30 - roasPrev) / roasPrev) * 100 : 0;
 
-  // ---- KPI: Active Clients ----------------------------------------------
-  const activeDelta = activeCount - activeOlderThan90;
-
-  // ---- KPI: Winning Creatives -------------------------------------------
-  const winnersDelta = winningLast14;
-
   // ---- Per-client aggregates (for ActiveClients list) -------------------
   const mtdByClient = new Map<string, number>();
   for (const row of sumByCampaignMtd) {
@@ -223,6 +207,82 @@ export default async function DashboardPage() {
     cur.spend += num(row._sum.spend);
     cur.conv += num(row._sum.conversionValue);
     last30ByClient.set(clientId, cur);
+  }
+
+  // ---- KPI: Active Clients (spend-based) --------------------------------
+  // A client counts iff it is ACTIVE AND has real spend in the same last-30d
+  // window used by Spend Under Management. Zero-spend ACTIVE clients are
+  // excluded. No delta sub-label (the old "vs 90d ago" referenced a count
+  // that no longer exists).
+  const activeCount = clientsForList.filter(
+    (c) => c.status === "ACTIVE" && (last30ByClient.get(c.id)?.spend ?? 0) > 0,
+  ).length;
+
+  // ---- KPI: Winning Creatives (live-derived, Meta-reported) -------------
+  // Per grouped creative asset over the last-30d window: spend > 0 AND
+  // purchases > 0 AND the asset's client has a non-null minRoas AND the
+  // asset's Meta-reported ROAS (conversionValue / spend) meets that target.
+  // Clients with a null minRoas are excluded (no target to test against).
+  const minRoasByClient = new Map<string, number | null>(
+    clientsForList.map((c) => [
+      c.id,
+      c.minRoas != null ? num(c.minRoas) : null,
+    ]),
+  );
+  const adIdsForWinners = creativesForWinners.flatMap((cr) =>
+    cr.ads.map((a) => a.id),
+  );
+  const winnerSumByAd = new Map<
+    string,
+    { spend: number; purchases: number; conv: number }
+  >();
+  if (adIdsForWinners.length > 0) {
+    const adInsightRows = await db.insightsDaily.groupBy({
+      by: ["entityId"],
+      where: {
+        entityType: "AD",
+        entityId: { in: adIdsForWinners },
+        date: { gte: d30 },
+      },
+      _sum: { spend: true, purchases: true, conversionValue: true },
+    });
+    for (const r of adInsightRows) {
+      winnerSumByAd.set(r.entityId, {
+        spend: num(r._sum.spend),
+        purchases: num(r._sum.purchases),
+        conv: num(r._sum.conversionValue),
+      });
+    }
+  }
+  // Group creatives per client, then collapse same-asset rows into one card,
+  // summing the three metrics across every member creative's ads.
+  const creativesByClient = new Map<string, typeof creativesForWinners>();
+  for (const cr of creativesForWinners) {
+    const clientId = cr.adAccountConnection.clientId;
+    const list = creativesByClient.get(clientId) ?? [];
+    list.push(cr);
+    creativesByClient.set(clientId, list);
+  }
+  let winningTotal = 0;
+  for (const [clientId, clientCreatives] of creativesByClient) {
+    const minRoas = minRoasByClient.get(clientId) ?? null;
+    if (minRoas == null) continue; // no target → cannot qualify
+    for (const members of groupCreativesByAsset(clientCreatives)) {
+      let spend = 0;
+      let purchases = 0;
+      let conv = 0;
+      for (const member of members) {
+        for (const ad of member.ads) {
+          const s = winnerSumByAd.get(ad.id);
+          if (!s) continue;
+          spend += s.spend;
+          purchases += s.purchases;
+          conv += s.conv;
+        }
+      }
+      const assetRoas = spend > 0 ? conv / spend : 0;
+      if (spend > 0 && purchases > 0 && assetRoas >= minRoas) winningTotal += 1;
+    }
   }
 
   // ---- Data freshness (per client) --------------------------------------
@@ -377,21 +437,12 @@ export default async function DashboardPage() {
         <KpiCard
           label='Active Clients'
           value={String(activeCount)}
-          delta={{
-            value: `${activeDelta >= 0 ? "+" : ""}${activeDelta}`,
-            label: "vs 90d ago",
-            positive: activeDelta >= 0,
-          }}
           icon={Users}
         />
         <KpiCard
           label='Winning Creatives'
           value={String(winningTotal)}
-          delta={{
-            value: `${winnersDelta >= 0 ? "+" : ""}${winnersDelta}`,
-            label: "new in 14d",
-            positive: winnersDelta >= 0,
-          }}
+          caption='Meta-reported'
           icon={Sparkles}
         />
       </div>
