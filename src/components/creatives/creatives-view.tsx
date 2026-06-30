@@ -246,6 +246,100 @@ const RANGE_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
 const GRID_WINDOW_DAYS = 30;
 
 // ---------------------------------------------------------------------------
+// Ranking mode (CR2) — filter + sort by media-buyer decision intent. This is
+// NOT a weighted/composite score: each mode is a membership predicate plus a
+// deterministic ordering. The verdict guards and the median reasoning are
+// mirrored from src/app/api/connections/[connectionId]/creative-report/route.ts.
+// ---------------------------------------------------------------------------
+
+// Ranking thresholds — copied verbatim from creative-report/route.ts
+// (deliberately NOT imported this phase; route stays frozen). Keep in sync
+// manually if the report's constants change.
+const SCALE_MIN_SPEND_SHARE = 0.05;
+const SCALE_ROAS_MEDIAN_MULT = 1.2;
+const SCALE_MIN_PURCHASES = 3;
+const KILL_MIN_SPEND = 250;
+
+type RankMode = "manual" | "scale" | "efficient" | "spend_risk" | "fatigue";
+
+const RANK_OPTIONS: ReadonlyArray<{ value: RankMode; label: string }> = [
+  { value: "manual", label: "Manual sort" },
+  { value: "scale", label: "Best to Scale" },
+  { value: "efficient", label: "Efficient, Low Volume" },
+  { value: "spend_risk", label: "High Spend Risk" },
+  { value: "fatigue", label: "Fatigue Risk" },
+];
+
+type ActiveRankMode = Exclude<RankMode, "manual">;
+
+/**
+ * Membership test: does a creative belong to the given ranking mode? Mirrors
+ * the verdict guards in creative-report/route.ts exactly. `spendShare` is the
+ * creative's share of total grid-window spend (precomputed by the caller from
+ * the unfiltered spenders population), and `fatigued` is the copied
+ * isFatigued() result over the same grid window. `_totalSpend` is part of the
+ * documented signature but unused here — the share is already supplied.
+ */
+function isInRankMode(
+  mode: ActiveRankMode,
+  agg: Aggregate,
+  spendShare: number,
+  fatigued: boolean,
+  _totalSpend: number,
+  medianRoas: number,
+): boolean {
+  const { roas, spend, purchases } = agg;
+  switch (mode) {
+    case "scale":
+      return (
+        (spendShare >= SCALE_MIN_SPEND_SHARE && roas > medianRoas) ||
+        (medianRoas > 0 &&
+          roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
+          purchases >= SCALE_MIN_PURCHASES)
+      );
+    case "efficient":
+      return (
+        medianRoas > 0 &&
+        roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
+        purchases >= SCALE_MIN_PURCHASES &&
+        spendShare < SCALE_MIN_SPEND_SHARE
+      );
+    case "spend_risk":
+      return spend >= KILL_MIN_SPEND && (purchases === 0 || roas < medianRoas);
+    case "fatigue":
+      return fatigued === true;
+  }
+}
+
+/**
+ * Deterministic ordering within a ranking mode. Each comparison ends in an
+ * `id.localeCompare` tie-break so the order is stable across renders.
+ */
+function compareInRankMode(
+  mode: ActiveRankMode,
+  a: { id: string; agg: Aggregate },
+  b: { id: string; agg: Aggregate },
+): number {
+  const tie = a.id.localeCompare(b.id);
+  switch (mode) {
+    case "scale":
+      // ROAS desc, then spend desc.
+      return b.agg.roas - a.agg.roas || b.agg.spend - a.agg.spend || tie;
+    case "efficient":
+      // ROAS desc, then purchases desc.
+      return (
+        b.agg.roas - a.agg.roas || b.agg.purchases - a.agg.purchases || tie
+      );
+    case "spend_risk":
+      // Spend desc, then ROAS ascending (worst ROAS first).
+      return b.agg.spend - a.agg.spend || a.agg.roas - b.agg.roas || tie;
+    case "fatigue":
+      // Frequency desc, then id.
+      return b.agg.frequency - a.agg.frequency || tie;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Small UI bits
 // ---------------------------------------------------------------------------
 
@@ -990,6 +1084,7 @@ export function CreativesView({
 }) {
   const [sortKey, setSortKey] = React.useState<SortKey>("spend");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
+  const [rankMode, setRankMode] = React.useState<RankMode>("manual");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("ALL");
   const [statusFilter, setStatusFilter] =
     React.useState<StatusFilter>("ACTIVE");
@@ -1020,6 +1115,39 @@ export function CreativesView({
     () => creatives.some((c) => aggById.get(c.id)?.hasData),
     [creatives, aggById],
   );
+
+  // Ranking baseline — total spend + median ROAS over ALL creatives that spent
+  // in the grid window (the same `withSpend` population the KPI strip uses),
+  // computed BEFORE any type/status/threshold filter. This must never be the
+  // filtered/visible set, or the thresholds would drift with the active view.
+  const { totalSpend, medianRoas } = React.useMemo(() => {
+    const withSpend = creatives.filter(
+      (c) => (aggById.get(c.id)?.spend ?? 0) > 0,
+    );
+    const total = withSpend.reduce(
+      (acc, c) => acc + (aggById.get(c.id)?.spend ?? 0),
+      0,
+    );
+    // Median ROAS across positive-ROAS spenders only. Zero-ROAS spenders are
+    // excluded on purpose: in a quiet wind-down window where most creatives
+    // have ROAS 0, including them would drag the median to exactly 0, which
+    // makes the SCALE_ROAS_MEDIAN_MULT multiplier meaningless and trips the
+    // medianRoas > 0 guard so the efficiency path never fires. If the positive
+    // subset is empty, medianRoas stays 0. (Mirrors creative-report/route.ts.)
+    const roasSorted = withSpend
+      .map((c) => aggById.get(c.id)!.roas)
+      .filter((roas) => roas > 0)
+      .sort((a, b) => a - b);
+    const median =
+      roasSorted.length === 0
+        ? 0
+        : roasSorted.length % 2 === 1
+          ? roasSorted[(roasSorted.length - 1) / 2]
+          : (roasSorted[roasSorted.length / 2 - 1] +
+              roasSorted[roasSorted.length / 2]) /
+            2;
+    return { totalSpend: total, medianRoas: median };
+  }, [creatives, aggById]);
 
   // KPI strip — over creatives that actually spent in the window.
   const kpis = React.useMemo(() => {
@@ -1071,6 +1199,36 @@ export function CreativesView({
       if (!Number.isNaN(ctrT) && a.ctr * 100 < ctrT) return false;
       return true;
     });
+
+    // Ranking mode overrides the manual sort: after the existing type/status/
+    // threshold filters, keep only members of the active mode, then order by
+    // that mode's deterministic rule. The manual sortKey/sortDir controls are
+    // ignored (not deleted) while a ranking mode is active.
+    if (rankMode !== "manual") {
+      const members = filtered.filter((c) => {
+        const a = aggById.get(c.id)!;
+        const spendShare = totalSpend > 0 ? a.spend / totalSpend : 0;
+        const fatigued = isFatigued(withinWindow(c.daily, gridCutoff));
+        return isInRankMode(
+          rankMode,
+          a,
+          spendShare,
+          fatigued,
+          totalSpend,
+          medianRoas,
+        );
+      });
+      return members
+        .slice()
+        .sort((x, y) =>
+          compareInRankMode(
+            rankMode,
+            { id: x.id, agg: aggById.get(x.id)! },
+            { id: y.id, agg: aggById.get(y.id)! },
+          ),
+        );
+    }
+
     const dir = sortDir === "asc" ? 1 : -1;
     const value = (c: CreativeItem): number => {
       const a = aggById.get(c.id)!;
@@ -1091,6 +1249,7 @@ export function CreativesView({
   }, [
     creatives,
     aggById,
+    gridCutoff,
     typeFilter,
     statusFilter,
     minRoas,
@@ -1098,6 +1257,9 @@ export function CreativesView({
     minCtr,
     sortKey,
     sortDir,
+    rankMode,
+    totalSpend,
+    medianRoas,
   ]);
 
   const toggleMetric = (key: MetricKey) => {
@@ -1179,8 +1341,28 @@ export function CreativesView({
       {/* Controls */}
       <div className='space-y-3 rounded-lg border border-border/60 bg-card/40 p-3 text-xs'>
         <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
-          {/* Sort */}
+          {/* Rank */}
           <div className='flex items-center gap-1.5'>
+            <span className='text-muted-foreground'>Rank</span>
+            {RANK_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type='button'
+                onClick={() => setRankMode(o.value)}
+                className={rankMode === o.value ? chipActive : chipIdle}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+          {/* Sort */}
+          <div
+            className={cn(
+              "flex items-center gap-1.5",
+              rankMode !== "manual" && "opacity-60",
+            )}>
             <span className='text-muted-foreground'>Sort</span>
             {SORT_OPTIONS.map((o) => (
               <button
@@ -1198,6 +1380,11 @@ export function CreativesView({
               title={sortDir === "asc" ? "Ascending" : "Descending"}>
               {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
             </button>
+            {rankMode !== "manual" && (
+              <span className='text-muted-foreground'>
+                (overridden by ranking)
+              </span>
+            )}
           </div>
 
           {/* Type */}
