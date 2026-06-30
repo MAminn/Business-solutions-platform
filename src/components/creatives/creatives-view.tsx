@@ -42,6 +42,7 @@ export interface CreativeDailyPoint {
   purchases: number;
   conversionValue: number;
   frequency: number | null;
+  ctr: number | null; // STORED per-day ctr (for the fatigue trend only)
 }
 
 export interface CreativeLinkedAd {
@@ -68,6 +69,7 @@ export interface CreativeItem {
   launchDate: string | null; // ISO
   reviewUrl: string | null;
   hasRealPostPreview: boolean;
+  postId: string | null;
   daily: CreativeDailyPoint[];
   linkedAds?: CreativeLinkedAd[];
 }
@@ -152,6 +154,46 @@ function withinWindow(
   return points.filter((p) => p.date >= cutoff);
 }
 
+/**
+ * Fatigue trend — copied from src/server/digest.ts `isFatigued` (deliberately
+ * NOT imported this phase). Declining stored CTR while stored frequency rises,
+ * over the STABLE older days only: sort ascending, drop the 2 most recent
+ * dates (the sync update-branch does not refresh ctr/frequency on re-pulled
+ * trailing days), keep days where BOTH stored ctr and frequency are present,
+ * require >= 4 usable days, then compare first-half vs second-half averages.
+ * Uses STORED per-day ctr/frequency directly — never the aggregate-level
+ * clicks/impressions ctr. (Date is a yyyy-MM-dd string here; lexical sort is
+ * equivalent to chronological, so behavior matches the digest.)
+ */
+function isFatigued(series: CreativeDailyPoint[]): boolean {
+  const sorted = [...series].sort((a, b) => a.date.localeCompare(b.date));
+  // Drop the 2 most recent dates.
+  const stable = sorted.slice(0, Math.max(0, sorted.length - 2));
+  const usable = stable.filter(
+    (d) => d.ctr !== null && d.frequency !== null,
+  ) as Array<{ ctr: number; frequency: number }>;
+  // Need a meaningful series to call a trend.
+  if (usable.length < 4) return false;
+
+  const mid = Math.floor(usable.length / 2);
+  const firstHalf = usable.slice(0, mid);
+  const secondHalf = usable.slice(mid);
+
+  const avg = (
+    arr: Array<{ ctr: number; frequency: number }>,
+    key: "ctr" | "frequency",
+  ): number => arr.reduce((acc, d) => acc + d[key], 0) / arr.length;
+
+  const ctrFirst = avg(firstHalf, "ctr");
+  const ctrSecond = avg(secondHalf, "ctr");
+  const freqFirst = avg(firstHalf, "frequency");
+  const freqSecond = avg(secondHalf, "frequency");
+
+  const ctrDeclining = ctrSecond < ctrFirst;
+  const freqRising = freqSecond > freqFirst;
+  return ctrDeclining && freqRising;
+}
+
 // ---------------------------------------------------------------------------
 // Static config
 // ---------------------------------------------------------------------------
@@ -234,6 +276,32 @@ function DetailRow({
       <span className='text-muted-foreground'>{label}</span>
       <span className='text-right font-medium text-foreground'>{value}</span>
     </div>
+  );
+}
+
+/** Visible, click-to-copy post/creative ID (uses the browser clipboard). */
+function PostIdRow({ postId }: { postId: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = () => {
+    try {
+      void navigator.clipboard?.writeText(postId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  };
+  return (
+    <button
+      type='button'
+      onClick={copy}
+      title='Copy post ID'
+      className='mt-0.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground'>
+      <span>Post ID · {postId}</span>
+      <span className='text-[10px] uppercase tracking-wider'>
+        {copied ? "Copied" : "Copy"}
+      </span>
+    </button>
   );
 }
 
@@ -450,6 +518,7 @@ function CreativeDrawer({
                   Ad ID · {item.adPlatformId}
                 </p>
               )}
+              {item.postId && <PostIdRow postId={item.postId} />}
               <div className='mt-3 flex flex-wrap items-center gap-3'>
                 <div className='flex items-center gap-1 text-xs'>
                   <span className='text-muted-foreground'>Range</span>
@@ -922,7 +991,8 @@ export function CreativesView({
   const [sortKey, setSortKey] = React.useState<SortKey>("spend");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("ALL");
-  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("ALL");
+  const [statusFilter, setStatusFilter] =
+    React.useState<StatusFilter>("ACTIVE");
   const [metrics, setMetrics] = React.useState<ReadonlySet<MetricKey>>(
     () => new Set<MetricKey>(["spend", "roas", "cpa", "purchases", "ctr"]),
   );
@@ -959,21 +1029,34 @@ export function CreativesView({
     const get = (c: CreativeItem) => aggById.get(c.id)!;
     const bestRoas = withSpend
       .filter((c) => get(c).roas > 0)
-      .sort((a, b) => get(b).roas - get(a).roas)[0];
+      .sort((a, b) => get(b).roas - get(a).roas || a.id.localeCompare(b.id))[0];
     const mostConv = withSpend
       .filter((c) => get(c).purchases > 0)
-      .sort((a, b) => get(b).purchases - get(a).purchases)[0];
+      .sort(
+        (a, b) =>
+          get(b).purchases - get(a).purchases || a.id.localeCompare(b.id),
+      )[0];
     const highestSpend = withSpend
       .slice()
-      .sort((a, b) => get(b).spend - get(a).spend)[0];
+      .sort(
+        (a, b) => get(b).spend - get(a).spend || a.id.localeCompare(b.id),
+      )[0];
     const worstRoas = withSpend
       .slice()
-      .sort((a, b) => get(a).roas - get(b).roas)[0];
+      .sort(
+        (a, b) => get(a).roas - get(b).roas || a.id.localeCompare(b.id),
+      )[0];
+    // Fatigue: driven by the copied stored-ctr/frequency trend over the SAME
+    // grid window as the cards, not a frequency>=3 gate. Deterministic pick:
+    // worst (highest avg) frequency first, then asset id ascending.
     const fatigue = withSpend
-      .filter((c) => get(c).frequency >= 3)
-      .sort((a, b) => get(b).frequency - get(a).frequency)[0];
+      .filter((c) => isFatigued(withinWindow(c.daily, gridCutoff)))
+      .sort(
+        (a, b) =>
+          get(b).frequency - get(a).frequency || a.id.localeCompare(b.id),
+      )[0];
     return { bestRoas, mostConv, highestSpend, worstRoas, fatigue };
-  }, [creatives, aggById]);
+  }, [creatives, aggById, gridCutoff]);
 
   // Filtering + sorting.
   const visible = React.useMemo(() => {
