@@ -1,10 +1,14 @@
 import { InsightEntity } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
-  previousCompletedMonth,
-  monthStartUTC,
-  monthEndUTC,
-} from "@/lib/month";
+  dayUTC,
+  isoUTC,
+  addDaysUTC,
+  labelUTC,
+  isValidIsoDate,
+  resolveRanges,
+  DAY_MS,
+} from "@/lib/date-window";
 
 // ============================================================================
 // Client Analysis — read-only aggregation over already-synced InsightsDaily.
@@ -86,50 +90,9 @@ export interface AnalysisResult {
   fatigue: FatigueHint;
 }
 
-const MONTH_ABBR = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 function num(value: unknown): number {
   if (value === null || value === undefined) return 0;
   return Number(value);
-}
-
-/** Parse a yyyy-MM-dd string to a UTC-midnight Date. */
-function dayUTC(iso: string): Date {
-  return new Date(`${iso}T00:00:00.000Z`);
-}
-
-function isoUTC(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function addDaysUTC(d: Date, n: number): Date {
-  return new Date(d.getTime() + n * DAY_MS);
-}
-
-/** TZ-safe short label from a UTC-midnight Date. */
-function labelUTC(d: Date): string {
-  return `${MONTH_ABBR[d.getUTCMonth()]} ${d.getUTCDate()}`;
-}
-
-function isValidIsoDate(s: string | undefined): s is string {
-  return (
-    !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(dayUTC(s).getTime())
-  );
 }
 
 interface DailyRow {
@@ -141,46 +104,6 @@ interface DailyRow {
   clicks: number;
   frequency: unknown;
   ctr: unknown;
-}
-
-/**
- * Resolve the [start, end] window (inclusive, UTC) and the immediately
- * preceding equal-length comparison window, anchored on the latest data date.
- */
-function resolveRanges(
-  params: AnalysisParams,
-  latest: Date,
-): { start: Date; end: Date; prevStart: Date; prevEnd: Date; days: number } {
-  let start: Date;
-  let end: Date;
-
-  if (params.preset === "prev_month") {
-    const spec = previousCompletedMonth(latest);
-    start = monthStartUTC(spec);
-    end = monthEndUTC(spec);
-  } else if (
-    params.preset === "custom" &&
-    isValidIsoDate(params.start) &&
-    isValidIsoDate(params.end)
-  ) {
-    start = dayUTC(params.start);
-    end = dayUTC(params.end);
-    if (start.getTime() > end.getTime()) {
-      const tmp = start;
-      start = end;
-      end = tmp;
-    }
-  } else {
-    // "7" or "30" (default) — window ends on the latest data date.
-    const span = params.preset === "7" ? 7 : 30;
-    end = latest;
-    start = addDaysUTC(latest, -(span - 1));
-  }
-
-  const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
-  const prevEnd = addDaysUTC(start, -1);
-  const prevStart = addDaysUTC(prevEnd, -(days - 1));
-  return { start, end, prevStart, prevEnd, days };
 }
 
 const ROW_SELECT = {
