@@ -1043,9 +1043,7 @@ export function CreativesView({
       )[0];
     const worstRoas = withSpend
       .slice()
-      .sort(
-        (a, b) => get(a).roas - get(b).roas || a.id.localeCompare(b.id),
-      )[0];
+      .sort((a, b) => get(a).roas - get(b).roas || a.id.localeCompare(b.id))[0];
     // Fatigue: driven by the copied stored-ctr/frequency trend over the SAME
     // grid window as the cards, not a frequency>=3 gate. Deterministic pick:
     // worst (highest avg) frequency first, then asset id ascending.
