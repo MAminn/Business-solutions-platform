@@ -194,12 +194,13 @@ export default async function ClientCreativesPage({ params }: PageProps) {
 
     // Merge daily rows across all ads of this group, keyed by date.
     const byDate = new Map<string, CreativeDailyPoint>();
-    // Stored per-day ctr is merged as a true average (sum/count of non-null
-    // stored values) across every ad on the same date — mirrors the per-day
-    // ctr averaging in creative-report/route.ts. Never the pairwise (cur+p)/2
-    // form used for frequency, never impression-weighted, never recomputed
+    // Stored per-day ctr and frequency are each merged as a true average
+    // (sum/count of non-null stored values) across every ad on the same date —
+    // mirrors the per-day ctr averaging in creative-report/route.ts. Never the
+    // pairwise (cur+p)/2 form, never impression-weighted, never recomputed
     // from clicks/impressions.
     const ctrByDate = new Map<string, { sum: number; count: number }>();
+    const freqByDate = new Map<string, { sum: number; count: number }>();
     for (const ad of ads) {
       for (const p of rowsByAd.get(ad.id) ?? []) {
         const cur = byDate.get(p.date);
@@ -211,12 +212,6 @@ export default async function ClientCreativesPage({ params }: PageProps) {
           cur.clicks += p.clicks;
           cur.purchases += p.purchases;
           cur.conversionValue += p.conversionValue;
-          if (p.frequency !== null) {
-            cur.frequency =
-              cur.frequency === null
-                ? p.frequency
-                : (cur.frequency + p.frequency) / 2;
-          }
         }
         if (p.ctr !== null) {
           const acc = ctrByDate.get(p.date) ?? { sum: 0, count: 0 };
@@ -224,12 +219,22 @@ export default async function ClientCreativesPage({ params }: PageProps) {
           acc.count += 1;
           ctrByDate.set(p.date, acc);
         }
+        if (p.frequency !== null) {
+          const acc = freqByDate.get(p.date) ?? { sum: 0, count: 0 };
+          acc.sum += p.frequency;
+          acc.count += 1;
+          freqByDate.set(p.date, acc);
+        }
       }
     }
-    // Resolve the merged stored ctr per date from the sum/count accumulator.
+    // Resolve the merged stored ctr/frequency per date from the sum/count
+    // accumulators (true average of non-null values).
     for (const [date, point] of byDate) {
-      const acc = ctrByDate.get(date);
-      point.ctr = acc && acc.count > 0 ? acc.sum / acc.count : null;
+      const ctrAcc = ctrByDate.get(date);
+      point.ctr = ctrAcc && ctrAcc.count > 0 ? ctrAcc.sum / ctrAcc.count : null;
+      const freqAcc = freqByDate.get(date);
+      point.frequency =
+        freqAcc && freqAcc.count > 0 ? freqAcc.sum / freqAcc.count : null;
     }
     const daily = Array.from(byDate.values()).sort((a, b) =>
       a.date.localeCompare(b.date),
