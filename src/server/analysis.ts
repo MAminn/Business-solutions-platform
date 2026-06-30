@@ -7,6 +7,7 @@ import {
   labelUTC,
   isValidIsoDate,
   resolveRanges,
+  resolveLatestDataDate,
   DAY_MS,
 } from "@/lib/date-window";
 
@@ -184,26 +185,10 @@ export async function getClientAnalysis(
   // Latest data date — anchor the window here, NOT on "today".
   // Prefer ACCOUNT level; fall back to CAMPAIGN level.
   // ---------------------------------------------------------------------------
-  const [accountMax, campaignMax] = await Promise.all([
-    db.insightsDaily.aggregate({
-      where: {
-        entityType: InsightEntity.ACCOUNT,
-        entityId: { in: connectionIds },
-      },
-      _max: { date: true },
-    }),
-    campaignIds.length > 0
-      ? db.insightsDaily.aggregate({
-          where: {
-            entityType: InsightEntity.CAMPAIGN,
-            entityId: { in: campaignIds },
-          },
-          _max: { date: true },
-        })
-      : Promise.resolve({ _max: { date: null } }),
-  ]);
-
-  const latest = accountMax._max.date ?? campaignMax._max.date ?? null;
+  const { accountLatest, latest } = await resolveLatestDataDate(
+    connectionIds,
+    campaignIds,
+  );
   if (!latest) return emptyResult;
 
   const { start, end, prevStart, prevEnd, days } = resolveRanges(
@@ -212,7 +197,7 @@ export async function getClientAnalysis(
   );
 
   // Account totals come from ACCOUNT-level rows when present, else CAMPAIGN.
-  const useAccountLevel = accountMax._max.date != null;
+  const useAccountLevel = accountLatest != null;
   const totalsEntityType = useAccountLevel
     ? InsightEntity.ACCOUNT
     : InsightEntity.CAMPAIGN;

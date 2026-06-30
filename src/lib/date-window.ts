@@ -3,6 +3,8 @@ import {
   monthStartUTC,
   monthEndUTC,
 } from "@/lib/month";
+import { InsightEntity } from "@prisma/client";
+import { db } from "@/lib/db";
 import type { AnalysisPreset } from "@/server/analysis";
 
 // ============================================================================
@@ -103,4 +105,53 @@ export function resolveRanges(
   const prevEnd = addDaysUTC(start, -1);
   const prevStart = addDaysUTC(prevEnd, -(days - 1));
   return { start, end, prevStart, prevEnd, days };
+}
+
+export interface LatestDataDateResult {
+  /** Max ACCOUNT-level insight date, or null when no account rows. */
+  accountLatest: Date | null;
+  /** Max CAMPAIGN-level insight date, or null when no campaign rows. */
+  campaignLatest: Date | null;
+  /** ACCOUNT preferred, CAMPAIGN fallback, else null. */
+  latest: Date | null;
+}
+
+/**
+ * Canonical Analysis latest-data-date resolver. ACCOUNT level preferred,
+ * CAMPAIGN level fallback, DB-side `_max`. Returns null when neither level has
+ * rows. Returns the raw per-level maxes too, so callers can decide
+ * account-vs-campaign-level sourcing without re-querying.
+ *
+ * NOTE: This is the Analysis/UI anchor (ACCOUNT→CAMPAIGN, no AD level). The
+ * monthly digest computes its own all-levels anchor separately and is NOT
+ * unified here on purpose.
+ */
+export async function resolveLatestDataDate(
+  connectionIds: string[],
+  campaignIds: string[],
+): Promise<LatestDataDateResult> {
+  const [accountMax, campaignMax] = await Promise.all([
+    db.insightsDaily.aggregate({
+      where: {
+        entityType: InsightEntity.ACCOUNT,
+        entityId: { in: connectionIds },
+      },
+      _max: { date: true },
+    }),
+    campaignIds.length > 0
+      ? db.insightsDaily.aggregate({
+          where: {
+            entityType: InsightEntity.CAMPAIGN,
+            entityId: { in: campaignIds },
+          },
+          _max: { date: true },
+        })
+      : Promise.resolve({ _max: { date: null } }),
+  ]);
+
+  const accountLatest = accountMax._max.date ?? null;
+  const campaignLatest = campaignMax._max.date ?? null;
+  const latest = accountLatest ?? campaignLatest ?? null;
+
+  return { accountLatest, campaignLatest, latest };
 }
