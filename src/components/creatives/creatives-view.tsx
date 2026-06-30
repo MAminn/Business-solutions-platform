@@ -1385,6 +1385,12 @@ export function CreativesView({
                 (overridden by ranking)
               </span>
             )}
+            {rankMode !== "manual" && statusFilter !== "ALL" && (
+              <span className='text-muted-foreground'>
+                (showing {statusFilter === "ACTIVE" ? "Active" : "Paused"} only
+                — set Status to All for every match)
+              </span>
+            )}
           </div>
 
           {/* Type */}
