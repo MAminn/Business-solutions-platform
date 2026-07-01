@@ -155,6 +155,23 @@ function withinWindow(
 }
 
 /**
+ * Bounded window filter — keeps points with start <= date <= end. Either bound
+ * may be empty (start) or null (end) to leave that side open. Preset grid
+ * windows pass end=null (open-ended upper, identical to withinWindow); custom
+ * windows pass both bounds so the window is clamped on BOTH ends. The drawer
+ * keeps using the single-cutoff withinWindow above, unchanged.
+ */
+function withinRange(
+  points: CreativeDailyPoint[],
+  start: string,
+  end: string | null,
+): CreativeDailyPoint[] {
+  return points.filter(
+    (p) => (!start || p.date >= start) && (!end || p.date <= end),
+  );
+}
+
+/**
  * Fatigue trend — copied from src/server/digest.ts `isFatigued` (deliberately
  * NOT imported this phase). Declining stored CTR while stored frequency rises,
  * over the STABLE older days only: sort ascending, drop the 2 most recent
@@ -1103,6 +1120,13 @@ export function CreativesView({
   // rangeDays state; they must never share a variable or setter.
   const [gridRangeDays, setGridRangeDays] =
     React.useState<number>(GRID_WINDOW_DAYS);
+  // Grid window mode: presets (7/14/30/90) or an explicit custom start/end
+  // pair. The drawer's own range state is separate and unaffected by this.
+  const [rangeMode, setRangeMode] = React.useState<"preset" | "custom">(
+    "preset",
+  );
+  const [customStart, setCustomStart] = React.useState("");
+  const [customEnd, setCustomEnd] = React.useState("");
 
   // Prefer the server-resolved canonical latest-data-date (yyyy-MM-dd string,
   // same shape latestDate returns) when provided; otherwise fall back to the
@@ -1111,19 +1135,62 @@ export function CreativesView({
     () => latestDataDate ?? latestDate(creatives),
     [latestDataDate, creatives],
   );
-  const gridCutoff = React.useMemo(
-    () => cutoffFor(resolvedAnchor, gridRangeDays),
-    [resolvedAnchor, gridRangeDays],
-  );
 
-  // Per-creative aggregate over the grid window (last 30 days).
+  // Oldest day present in the already-loaded data (the trailing ~90d fetched by
+  // the page). Custom start is clamped to this — older data is never fetched.
+  const oldestLoaded = React.useMemo(() => {
+    let min: string | null = null;
+    for (const c of creatives) {
+      for (const p of c.daily) {
+        if (min === null || p.date < min) min = p.date;
+      }
+    }
+    return min;
+  }, [creatives]);
+
+  // Resolved grid window as a { start, end } pair of yyyy-MM-dd strings.
+  //  - Preset: start = anchor − (N−1) via cutoffFor; end = null (open-ended
+  //    upper bound, byte-identical to the prior single-cutoff behavior).
+  //  - Custom: explicit start/end clamped to [oldestLoaded, anchor] (Option A)
+  //    and normalized so start <= end. Empty inputs default to the full loaded
+  //    span. `end` is concrete here, so the window is bounded on BOTH ends.
+  const gridWindow = React.useMemo<{
+    start: string;
+    end: string | null;
+  }>(() => {
+    if (rangeMode === "custom") {
+      let start = customStart || oldestLoaded || "";
+      let end = customEnd || resolvedAnchor || "";
+      if (oldestLoaded && start && start < oldestLoaded) start = oldestLoaded;
+      if (resolvedAnchor && end && end > resolvedAnchor) end = resolvedAnchor;
+      if (start && end && start > end) {
+        const tmp = start;
+        start = end;
+        end = tmp;
+      }
+      return { start, end: end || null };
+    }
+    return { start: cutoffFor(resolvedAnchor, gridRangeDays), end: null };
+  }, [
+    rangeMode,
+    customStart,
+    customEnd,
+    oldestLoaded,
+    resolvedAnchor,
+    gridRangeDays,
+  ]);
+
+  // Per-creative aggregate over the resolved grid window.
   const aggById = React.useMemo(() => {
     const m = new Map<string, Aggregate>();
     for (const c of creatives) {
-      m.set(c.id, aggregate(withinWindow(c.daily, gridCutoff)));
+      m.set(
+        c.id,
+        aggregate(withinRange(c.daily, gridWindow.start, gridWindow.end)),
+      );
     }
     return m;
-  }, [creatives, gridCutoff]);
+  }, [creatives, gridWindow]);
 
   const hasAnyInsights = React.useMemo(
     () => creatives.some((c) => aggById.get(c.id)?.hasData),
@@ -1190,13 +1257,15 @@ export function CreativesView({
     // grid window as the cards, not a frequency>=3 gate. Deterministic pick:
     // worst (highest avg) frequency first, then asset id ascending.
     const fatigue = withSpend
-      .filter((c) => isFatigued(withinWindow(c.daily, gridCutoff)))
+      .filter((c) =>
+        isFatigued(withinRange(c.daily, gridWindow.start, gridWindow.end)),
+      )
       .sort(
         (a, b) =>
           get(b).frequency - get(a).frequency || a.id.localeCompare(b.id),
       )[0];
     return { bestRoas, mostConv, highestSpend, worstRoas, fatigue };
-  }, [creatives, aggById, gridCutoff]);
+  }, [creatives, aggById, gridWindow]);
 
   // Filtering + sorting.
   const visible = React.useMemo(() => {
@@ -1222,7 +1291,9 @@ export function CreativesView({
       const members = filtered.filter((c) => {
         const a = aggById.get(c.id)!;
         const spendShare = totalSpend > 0 ? a.spend / totalSpend : 0;
-        const fatigued = isFatigued(withinWindow(c.daily, gridCutoff));
+        const fatigued = isFatigued(
+          withinRange(c.daily, gridWindow.start, gridWindow.end),
+        );
         return isInRankMode(
           rankMode,
           a,
@@ -1263,7 +1334,7 @@ export function CreativesView({
   }, [
     creatives,
     aggById,
-    gridCutoff,
+    gridWindow,
     typeFilter,
     statusFilter,
     minRoas,
@@ -1290,6 +1361,8 @@ export function CreativesView({
 
   const thresholdInput =
     "h-7 w-16 rounded border border-border bg-background px-1.5 text-right text-xs";
+  const dateInput =
+    "h-7 rounded border border-border bg-background px-1.5 text-xs";
 
   return (
     <div className='space-y-6'>
@@ -1356,17 +1429,60 @@ export function CreativesView({
       <div className='space-y-3 rounded-lg border border-border/60 bg-card/40 p-3 text-xs'>
         <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
           {/* Range */}
-          <div className='flex items-center gap-1.5'>
+          <div className='flex flex-wrap items-center gap-1.5'>
             <span className='text-muted-foreground'>Range</span>
             {RANGE_OPTIONS.map((o) => (
               <button
                 key={o.value}
                 type='button'
-                onClick={() => setGridRangeDays(o.value)}
-                className={gridRangeDays === o.value ? chipActive : chipIdle}>
+                onClick={() => {
+                  setRangeMode("preset");
+                  setGridRangeDays(o.value);
+                }}
+                className={
+                  rangeMode === "preset" && gridRangeDays === o.value
+                    ? chipActive
+                    : chipIdle
+                }>
                 {o.label}
               </button>
             ))}
+            <button
+              type='button'
+              onClick={() => {
+                setRangeMode("custom");
+                // Seed the custom inputs from the current preset window so
+                // entering custom mode does not jump the window.
+                if (!customStart)
+                  setCustomStart(cutoffFor(resolvedAnchor, gridRangeDays));
+                if (!customEnd && resolvedAnchor) setCustomEnd(resolvedAnchor);
+              }}
+              className={rangeMode === "custom" ? chipActive : chipIdle}>
+              Custom
+            </button>
+            {rangeMode === "custom" && (
+              <span className='flex items-center gap-1.5'>
+                <input
+                  type='date'
+                  value={customStart}
+                  min={oldestLoaded ?? undefined}
+                  max={customEnd || resolvedAnchor || undefined}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className={dateInput}
+                  aria-label='Custom range start'
+                />
+                <span className='text-muted-foreground'>→</span>
+                <input
+                  type='date'
+                  value={customEnd}
+                  min={customStart || oldestLoaded || undefined}
+                  max={resolvedAnchor ?? undefined}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className={dateInput}
+                  aria-label='Custom range end'
+                />
+              </span>
+            )}
           </div>
 
           {/* Rank */}
