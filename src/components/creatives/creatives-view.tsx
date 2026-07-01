@@ -1097,6 +1097,9 @@ export function CreativesView({
   const [minSpend, setMinSpend] = React.useState("");
   const [minCtr, setMinCtr] = React.useState("");
   const [selected, setSelected] = React.useState<CreativeItem | null>(null);
+  // Selectable grid window (presets only). Defaults to GRID_WINDOW_DAYS (30) so
+  // first render is byte-identical to the previous fixed-window behavior.
+  const [rangeDays, setRangeDays] = React.useState<number>(GRID_WINDOW_DAYS);
 
   // Prefer the server-resolved canonical latest-data-date (yyyy-MM-dd string,
   // same shape latestDate returns) when provided; otherwise fall back to the
@@ -1106,8 +1109,8 @@ export function CreativesView({
     [latestDataDate, creatives],
   );
   const gridCutoff = React.useMemo(
-    () => cutoffFor(resolvedAnchor, GRID_WINDOW_DAYS),
-    [resolvedAnchor],
+    () => cutoffFor(resolvedAnchor, rangeDays),
+    [resolvedAnchor, rangeDays],
   );
 
   // Per-creative aggregate over the grid window (last 30 days).
@@ -1349,6 +1352,20 @@ export function CreativesView({
       {/* Controls */}
       <div className='space-y-3 rounded-lg border border-border/60 bg-card/40 p-3 text-xs'>
         <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+          {/* Range */}
+          <div className='flex items-center gap-1.5'>
+            <span className='text-muted-foreground'>Range</span>
+            {RANGE_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type='button'
+                onClick={() => setRangeDays(o.value)}
+                className={rangeDays === o.value ? chipActive : chipIdle}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+
           {/* Rank */}
           <div className='flex items-center gap-1.5'>
             <span className='text-muted-foreground'>Rank</span>
