@@ -1078,9 +1078,11 @@ function CreativeCard({
 export function CreativesView({
   creatives,
   currency,
+  latestDataDate,
 }: {
   creatives: CreativeItem[];
   currency: string;
+  latestDataDate?: string | null;
 }) {
   const [sortKey, setSortKey] = React.useState<SortKey>("spend");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
@@ -1096,10 +1098,16 @@ export function CreativesView({
   const [minCtr, setMinCtr] = React.useState("");
   const [selected, setSelected] = React.useState<CreativeItem | null>(null);
 
-  const reference = React.useMemo(() => latestDate(creatives), [creatives]);
+  // Prefer the server-resolved canonical latest-data-date (yyyy-MM-dd string,
+  // same shape latestDate returns) when provided; otherwise fall back to the
+  // existing local scan across the loaded creatives.
+  const resolvedAnchor = React.useMemo(
+    () => latestDataDate ?? latestDate(creatives),
+    [latestDataDate, creatives],
+  );
   const gridCutoff = React.useMemo(
-    () => cutoffFor(reference, GRID_WINDOW_DAYS),
-    [reference],
+    () => cutoffFor(resolvedAnchor, GRID_WINDOW_DAYS),
+    [resolvedAnchor],
   );
 
   // Per-creative aggregate over the grid window (last 30 days).

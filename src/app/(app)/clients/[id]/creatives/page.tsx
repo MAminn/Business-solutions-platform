@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { groupCreativesByAsset } from "@/lib/creatives/group-by-asset";
 import { cleanCreativeName } from "@/lib/creatives/display-name";
+import { resolveLatestDataDate } from "@/lib/date-window";
 import {
   CreativesView,
   type CreativeItem,
@@ -78,6 +79,14 @@ export default async function ClientCreativesPage({ params }: PageProps) {
   const accountIdByConnection = new Map(
     connections.map((c) => [c.id, c.platformAccountId]),
   );
+
+  // Campaign IDs for this client's connections — needed only to resolve the
+  // canonical latest-data-date (ACCOUNT preferred, CAMPAIGN fallback).
+  const clientCampaigns = await db.campaign.findMany({
+    where: { adAccountConnectionId: { in: connectionIds } },
+    select: { id: true },
+  });
+  const campaignIds = clientCampaigns.map((c) => c.id);
 
   const creatives = await db.creative.findMany({
     where: { adAccountConnectionId: { in: connectionIds } },
@@ -157,7 +166,6 @@ export default async function ClientCreativesPage({ params }: PageProps) {
   // group. Many Creative rows (one per ad) can share a single asset, which
   // previously rendered as duplicate cards.
   const groups = groupCreativesByAsset(creatives);
-
   // Resolve READY full-res image assets (Step 1 ingestion) for every member
   // creative in one query, so cards/drawer can render from the authenticated
   // /api/creative-assets route instead of a (possibly expired) Meta URL.
@@ -186,6 +194,11 @@ export default async function ClientCreativesPage({ params }: PageProps) {
       groupedCards: groups.length,
     }),
   );
+
+  // Canonical latest-data-date anchor (ACCOUNT preferred, CAMPAIGN fallback),
+  // resolved server-side and passed as a plain ISO date string boundary.
+  const { latest } = await resolveLatestDataDate(connectionIds, campaignIds);
+  const latestDataDate = latest ? latest.toISOString().slice(0, 10) : null;
 
   const items: CreativeItem[] = groups.map((members) => {
     const primary = members[0];
@@ -362,7 +375,11 @@ export default async function ClientCreativesPage({ params }: PageProps) {
           description='Run sync to import creatives.'
         />
       ) : (
-        <CreativesView creatives={items} currency={currency} />
+        <CreativesView
+          creatives={items}
+          currency={currency}
+          latestDataDate={latestDataDate}
+        />
       )}
     </div>
   );
