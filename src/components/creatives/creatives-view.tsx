@@ -1153,6 +1153,15 @@ export function CreativesView({
 }) {
   const [sortKey, setSortKey] = React.useState<SortKey>("spend");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
+  // Secondary sort (Manual mode only) — applied where the primary comparison
+  // ties. "none" (default) keeps the manual comparator exactly as before.
+  // Ranking modes ignore this state entirely.
+  const [secondarySortKey, setSecondarySortKey] = React.useState<
+    SortKey | "none"
+  >("none");
+  const [secondarySortDir, setSecondarySortDir] = React.useState<
+    "asc" | "desc"
+  >("desc");
   const [rankMode, setRankMode] = React.useState<RankMode>("manual");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("ALL");
   const [statusFilter, setStatusFilter] =
@@ -1393,9 +1402,11 @@ export function CreativesView({
     }
 
     const dir = sortDir === "asc" ? 1 : -1;
-    const value = (c: CreativeItem): number => {
+    // Shared metric accessor for primary and secondary comparisons, so
+    // CPA/zero-purchase handling stays consistent between the two.
+    const valueFor = (c: CreativeItem, key: SortKey): number => {
       const a = aggById.get(c.id)!;
-      switch (sortKey) {
+      switch (key) {
         case "roas":
           return a.roas;
         case "cpa":
@@ -1408,7 +1419,23 @@ export function CreativesView({
           return a.spend;
       }
     };
-    return filtered.slice().sort((a, b) => (value(a) - value(b)) * dir);
+    if (secondarySortKey === "none") {
+      // Default path — identical to the pre-secondary-sort comparator. No
+      // added tie-break.
+      return filtered
+        .slice()
+        .sort((a, b) => (valueFor(a, sortKey) - valueFor(b, sortKey)) * dir);
+    }
+    // Secondary applies only where the primary comparison ties.
+    const dir2 = secondarySortDir === "asc" ? 1 : -1;
+    return filtered
+      .slice()
+      .sort(
+        (a, b) =>
+          (valueFor(a, sortKey) - valueFor(b, sortKey)) * dir ||
+          (valueFor(a, secondarySortKey) - valueFor(b, secondarySortKey)) *
+            dir2,
+      );
   }, [
     creatives,
     aggById,
@@ -1420,6 +1447,8 @@ export function CreativesView({
     minCtr,
     sortKey,
     sortDir,
+    secondarySortKey,
+    secondarySortDir,
     rankMode,
     totalSpend,
     medianRoas,
@@ -1615,6 +1644,43 @@ export function CreativesView({
               </span>
             )}
           </div>
+
+          {/* Then by — secondary sort, Manual mode only */}
+          {rankMode === "manual" && (
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>Then by</span>
+              <button
+                type='button'
+                onClick={() => setSecondarySortKey("none")}
+                className={secondarySortKey === "none" ? chipActive : chipIdle}>
+                None
+              </button>
+              {SORT_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  type='button'
+                  onClick={() => setSecondarySortKey(o.value)}
+                  className={
+                    secondarySortKey === o.value ? chipActive : chipIdle
+                  }>
+                  {o.label}
+                </button>
+              ))}
+              {secondarySortKey !== "none" && (
+                <button
+                  type='button'
+                  onClick={() =>
+                    setSecondarySortDir((d) => (d === "asc" ? "desc" : "asc"))
+                  }
+                  className={chipIdle}
+                  title={
+                    secondarySortDir === "asc" ? "Ascending" : "Descending"
+                  }>
+                  {secondarySortDir === "asc" ? "↑ Asc" : "↓ Desc"}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Type */}
           <div className='flex items-center gap-1.5'>
