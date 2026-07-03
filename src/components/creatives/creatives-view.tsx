@@ -232,13 +232,14 @@ function isActive(status: string | null | undefined): boolean {
   return (status ?? "").toUpperCase() === "ACTIVE";
 }
 
-type SortKey = "spend" | "roas" | "cpa" | "conversions" | "ctr";
+type SortKey = "spend" | "roas" | "cpa" | "conversions" | "ctr" | "revenue";
 type MetricKey = "spend" | "roas" | "cpa" | "purchases" | "ctr";
 type TypeFilter = "ALL" | "IMAGE" | "VIDEO";
 type StatusFilter = "ALL" | "ACTIVE" | "PAUSED";
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "spend", label: "Spend" },
+  { value: "revenue", label: "Revenue" },
   { value: "roas", label: "ROAS" },
   { value: "cpa", label: "CPA" },
   { value: "conversions", label: "Conversions" },
@@ -263,31 +264,19 @@ const RANGE_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
 const GRID_WINDOW_DAYS = 30;
 
 // ---------------------------------------------------------------------------
-// Ranking mode (CR2) — filter + sort by media-buyer decision intent. This is
-// NOT a weighted/composite score: each mode is a membership predicate plus a
-// deterministic ordering. The verdict guards and the median reasoning are
-// mirrored from src/app/api/connections/[connectionId]/creative-report/route.ts.
+// Verdict groups — exclusive, verdict-first grouping driven by the per-card
+// verdict below (Kill → Refresh → Scale → Hold/Watch precedence). Every
+// creative belongs to exactly one group, so the tab's decision model is
+// identical to the Creative Analysis PDF. NOT a weighted/composite score.
 // ---------------------------------------------------------------------------
 
-// Ranking thresholds — copied verbatim from creative-report/route.ts
+// Verdict thresholds — copied verbatim from creative-report/route.ts
 // (deliberately NOT imported this phase; route stays frozen). Keep in sync
 // manually if the report's constants change.
 const SCALE_MIN_SPEND_SHARE = 0.05;
 const SCALE_ROAS_MEDIAN_MULT = 1.2;
 const SCALE_MIN_PURCHASES = 3;
 const KILL_MIN_SPEND = 250;
-
-type RankMode = "manual" | "scale" | "efficient" | "spend_risk" | "fatigue";
-
-const RANK_OPTIONS: ReadonlyArray<{ value: RankMode; label: string }> = [
-  { value: "manual", label: "Manual sort" },
-  { value: "scale", label: "Best to Scale" },
-  { value: "efficient", label: "Efficient, Low Volume" },
-  { value: "spend_risk", label: "High Spend Risk" },
-  { value: "fatigue", label: "Fatigue Risk" },
-];
-
-type ActiveRankMode = Exclude<RankMode, "manual">;
 
 // ---------------------------------------------------------------------------
 // Per-card verdict — copied from creative-report/route.ts `deriveVerdict`
@@ -320,7 +309,7 @@ function deriveVerdict(
   // Refresh: a fatigue trend is present (outranks Scale).
   if (fatigued) return "Refresh";
   // Scale: spend-share path OR efficiency path — identical guards to the
-  // `scale` rank-mode membership above, including the medianRoas > 0 guard.
+  // passesScale* helpers below, including the medianRoas > 0 guard.
   if (spendShare >= SCALE_MIN_SPEND_SHARE && agg.roas > medianRoas) {
     return "Scale";
   }
@@ -335,71 +324,55 @@ function deriveVerdict(
 }
 
 /**
- * Membership test: does a creative belong to the given ranking mode? Mirrors
- * the verdict guards in creative-report/route.ts exactly. `spendShare` is the
- * creative's share of total grid-window spend (precomputed by the caller from
- * the unfiltered spenders population), and `fatigued` is the copied
- * isFatigued() result over the same grid window. `_totalSpend` is part of the
- * documented signature but unused here — the share is already supplied.
+ * Scale membership predicate — the two qualifying paths, kept separable so the
+ * explanatory card badges can say WHICH path a creative qualified through.
+ * Mirrors the Scale guards in creative-report/route.ts `deriveVerdict`
+ * exactly; do not alter the logic or thresholds independently of the report.
  */
-function isInRankMode(
-  mode: ActiveRankMode,
+function passesScaleVolume(
   agg: Aggregate,
   spendShare: number,
-  fatigued: boolean,
-  _totalSpend: number,
   medianRoas: number,
 ): boolean {
-  const { roas, spend, purchases } = agg;
-  switch (mode) {
-    case "scale":
-      return (
-        (spendShare >= SCALE_MIN_SPEND_SHARE && roas > medianRoas) ||
-        (medianRoas > 0 &&
-          roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
-          purchases >= SCALE_MIN_PURCHASES)
-      );
-    case "efficient":
-      return (
-        medianRoas > 0 &&
-        roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
-        purchases >= SCALE_MIN_PURCHASES &&
-        spendShare < SCALE_MIN_SPEND_SHARE
-      );
-    case "spend_risk":
-      return spend >= KILL_MIN_SPEND && (purchases === 0 || roas < medianRoas);
-    case "fatigue":
-      return fatigued === true;
-  }
+  return spendShare >= SCALE_MIN_SPEND_SHARE && agg.roas > medianRoas;
 }
 
-/**
- * Deterministic ordering within a ranking mode. Each comparison ends in an
- * `id.localeCompare` tie-break so the order is stable across renders.
- */
-function compareInRankMode(
-  mode: ActiveRankMode,
-  a: { id: string; agg: Aggregate },
-  b: { id: string; agg: Aggregate },
-): number {
-  const tie = a.id.localeCompare(b.id);
-  switch (mode) {
-    case "scale":
-      // ROAS desc, then spend desc.
-      return b.agg.roas - a.agg.roas || b.agg.spend - a.agg.spend || tie;
-    case "efficient":
-      // ROAS desc, then purchases desc.
-      return (
-        b.agg.roas - a.agg.roas || b.agg.purchases - a.agg.purchases || tie
-      );
-    case "spend_risk":
-      // Spend desc, then ROAS ascending (worst ROAS first).
-      return b.agg.spend - a.agg.spend || a.agg.roas - b.agg.roas || tie;
-    case "fatigue":
-      // Frequency desc, then id.
-      return b.agg.frequency - a.agg.frequency || tie;
-  }
+function passesScaleEfficiency(agg: Aggregate, medianRoas: number): boolean {
+  return (
+    medianRoas > 0 &&
+    agg.roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
+    agg.purchases >= SCALE_MIN_PURCHASES
+  );
 }
+
+function passesScale(
+  agg: Aggregate,
+  spendShare: number,
+  medianRoas: number,
+): boolean {
+  return (
+    passesScaleVolume(agg, spendShare, medianRoas) ||
+    passesScaleEfficiency(agg, medianRoas)
+  );
+}
+
+/** Exclusive verdict groups. NO_SPEND = no verdict entry (zero in-window
+ * spend — the population the report's rows skip). */
+type VerdictGroup = "ALL" | Verdict | "NO_SPEND";
+
+const GROUP_OPTIONS: ReadonlyArray<{ value: VerdictGroup; label: string }> = [
+  { value: "ALL", label: "All" },
+  { value: "Scale", label: "Scale" },
+  { value: "Refresh", label: "Refresh" },
+  { value: "Kill", label: "Kill" },
+  { value: "Hold/Watch", label: "Hold/Watch" },
+  { value: "NO_SPEND", label: "No spend" },
+];
+
+/** Explanatory card badge: which Scale path a Scale card qualified through,
+ * or the fatiguing-winner marker on Refresh cards that pass the Scale
+ * predicate. */
+type CardFlag = "Volume" | "Efficiency" | "Scale-qualified";
 
 // ---------------------------------------------------------------------------
 // Small UI bits
@@ -998,6 +971,7 @@ function CreativeCard({
   currency,
   metrics,
   verdict,
+  flag,
   onOpen,
 }: {
   item: CreativeItem;
@@ -1005,6 +979,7 @@ function CreativeCard({
   currency: string;
   metrics: ReadonlySet<MetricKey>;
   verdict: Verdict | null;
+  flag: CardFlag | null;
   onOpen: () => void;
 }) {
   const allChips: Array<{ key: MetricKey; label: string; value: string }> = [
@@ -1075,6 +1050,7 @@ function CreativeCard({
           {verdict && (
             <Badge variant={VERDICT_VARIANT[verdict]}>{verdict}</Badge>
           )}
+          {flag && <Badge variant='muted'>{flag}</Badge>}
         </div>
       </button>
 
@@ -1153,16 +1129,8 @@ export function CreativesView({
 }) {
   const [sortKey, setSortKey] = React.useState<SortKey>("spend");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
-  // Secondary sort (Manual mode only) — applied where the primary comparison
-  // ties. "none" (default) keeps the manual comparator exactly as before.
-  // Ranking modes ignore this state entirely.
-  const [secondarySortKey, setSecondarySortKey] = React.useState<
-    SortKey | "none"
-  >("none");
-  const [secondarySortDir, setSecondarySortDir] = React.useState<
-    "asc" | "desc"
-  >("desc");
-  const [rankMode, setRankMode] = React.useState<RankMode>("manual");
+  // Exclusive verdict group (verdict-first grouping). "ALL" is the default.
+  const [group, setGroup] = React.useState<VerdictGroup>("ALL");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("ALL");
   const [statusFilter, setStatusFilter] =
     React.useState<StatusFilter>("ACTIVE");
@@ -1309,6 +1277,53 @@ export function CreativesView({
     return m;
   }, [creatives, aggById, totalSpend, medianRoas, gridWindow]);
 
+  // Explanatory card badges — derived from the same predicates/baseline as the
+  // verdicts (sibling memo, same deps) so they re-derive with the window.
+  //  - Scale cards: "Volume" when the spend-share path passes (shown even if
+  //    both paths pass), otherwise "Efficiency".
+  //  - Refresh cards that pass the Scale predicate: "Scale-qualified" — the
+  //    fatiguing winner marker.
+  const flagById = React.useMemo(() => {
+    const m = new Map<string, CardFlag>();
+    for (const c of creatives) {
+      const v = verdictById.get(c.id);
+      if (!v) continue;
+      const a = aggById.get(c.id)!;
+      const spendShare = totalSpend > 0 ? a.spend / totalSpend : 0;
+      if (v === "Scale") {
+        m.set(
+          c.id,
+          passesScaleVolume(a, spendShare, medianRoas)
+            ? "Volume"
+            : "Efficiency",
+        );
+      } else if (v === "Refresh" && passesScale(a, spendShare, medianRoas)) {
+        m.set(c.id, "Scale-qualified");
+      }
+    }
+    return m;
+  }, [creatives, verdictById, aggById, totalSpend, medianRoas]);
+
+  // Group counts over the FULL in-window population, BEFORE type/status/
+  // threshold filters — so they match the PDF's verdict counts (No spend
+  // counted separately).
+  const groupCounts = React.useMemo(() => {
+    const counts: Record<VerdictGroup, number> = {
+      ALL: creatives.length,
+      Scale: 0,
+      Refresh: 0,
+      Kill: 0,
+      "Hold/Watch": 0,
+      NO_SPEND: 0,
+    };
+    for (const c of creatives) {
+      const v = verdictById.get(c.id);
+      if (v) counts[v] += 1;
+      else counts.NO_SPEND += 1;
+    }
+    return counts;
+  }, [creatives, verdictById]);
+
   // KPI strip — over creatives that actually spent in the window.
   const kpis = React.useMemo(() => {
     const withSpend = creatives.filter(
@@ -1346,12 +1361,17 @@ export function CreativesView({
     return { bestRoas, mostConv, highestSpend, worstRoas, fatigue };
   }, [creatives, aggById, gridWindow]);
 
-  // Filtering + sorting.
+  // Filtering + sorting — exclusive group membership first, then the existing
+  // type/status/threshold filters, then the single-key manual sort.
   const visible = React.useMemo(() => {
     const roasT = parseFloat(minRoas);
     const spendT = parseFloat(minSpend);
     const ctrT = parseFloat(minCtr); // entered as percent
     const filtered = creatives.filter((c) => {
+      if (group !== "ALL") {
+        const v = verdictById.get(c.id);
+        if (group === "NO_SPEND" ? v !== undefined : v !== group) return false;
+      }
       if (typeFilter !== "ALL" && c.type !== typeFilter) return false;
       if (statusFilter === "ACTIVE" && !isActive(c.status)) return false;
       if (statusFilter === "PAUSED" && isActive(c.status)) return false;
@@ -1362,48 +1382,7 @@ export function CreativesView({
       return true;
     });
 
-    // Ranking mode overrides the manual sort: after the existing type/status/
-    // threshold filters, keep only members of the active mode, then order by
-    // that mode's deterministic rule. The manual sortKey/sortDir controls are
-    // ignored (not deleted) while a ranking mode is active.
-    if (rankMode !== "manual") {
-      const members = filtered.filter((c) => {
-        const a = aggById.get(c.id)!;
-        const spendShare = totalSpend > 0 ? a.spend / totalSpend : 0;
-        const fatigued = isFatigued(
-          withinRange(c.daily, gridWindow.start, gridWindow.end),
-        );
-        return isInRankMode(
-          rankMode,
-          a,
-          spendShare,
-          fatigued,
-          totalSpend,
-          medianRoas,
-        );
-      });
-      return members.slice().sort((x, y) => {
-        // Demotion within Best to Scale: scale-qualified but fatigued
-        // members (verdict Refresh) sort after all non-fatigued members.
-        // Membership is unchanged — they stay in the list, chip-flagged —
-        // and the existing ROAS-desc ordering + id tie-break is preserved
-        // within each group.
-        if (rankMode === "scale") {
-          const dx = verdictById.get(x.id) === "Refresh" ? 1 : 0;
-          const dy = verdictById.get(y.id) === "Refresh" ? 1 : 0;
-          if (dx !== dy) return dx - dy;
-        }
-        return compareInRankMode(
-          rankMode,
-          { id: x.id, agg: aggById.get(x.id)! },
-          { id: y.id, agg: aggById.get(y.id)! },
-        );
-      });
-    }
-
     const dir = sortDir === "asc" ? 1 : -1;
-    // Shared metric accessor for primary and secondary comparisons, so
-    // CPA/zero-purchase handling stays consistent between the two.
     const valueFor = (c: CreativeItem, key: SortKey): number => {
       const a = aggById.get(c.id)!;
       switch (key) {
@@ -1415,31 +1394,20 @@ export function CreativesView({
           return a.purchases;
         case "ctr":
           return a.ctr;
+        case "revenue":
+          return a.conversionValue;
         default:
           return a.spend;
       }
     };
-    if (secondarySortKey === "none") {
-      // Default path — identical to the pre-secondary-sort comparator. No
-      // added tie-break.
-      return filtered
-        .slice()
-        .sort((a, b) => (valueFor(a, sortKey) - valueFor(b, sortKey)) * dir);
-    }
-    // Secondary applies only where the primary comparison ties.
-    const dir2 = secondarySortDir === "asc" ? 1 : -1;
     return filtered
       .slice()
-      .sort(
-        (a, b) =>
-          (valueFor(a, sortKey) - valueFor(b, sortKey)) * dir ||
-          (valueFor(a, secondarySortKey) - valueFor(b, secondarySortKey)) *
-            dir2,
-      );
+      .sort((a, b) => (valueFor(a, sortKey) - valueFor(b, sortKey)) * dir);
   }, [
     creatives,
     aggById,
-    gridWindow,
+    verdictById,
+    group,
     typeFilter,
     statusFilter,
     minRoas,
@@ -1447,12 +1415,6 @@ export function CreativesView({
     minCtr,
     sortKey,
     sortDir,
-    secondarySortKey,
-    secondarySortDir,
-    rankMode,
-    totalSpend,
-    medianRoas,
-    verdictById,
   ]);
 
   const toggleMetric = (key: MetricKey) => {
@@ -1593,28 +1555,38 @@ export function CreativesView({
             )}
           </div>
 
-          {/* Rank */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Rank</span>
-            {RANK_OPTIONS.map((o) => (
+          {/* Group — exclusive verdict-first groups */}
+          <div className='flex flex-wrap items-center gap-1.5'>
+            <span className='text-muted-foreground'>Group</span>
+            {GROUP_OPTIONS.map((o) => (
               <button
                 key={o.value}
                 type='button'
-                onClick={() => setRankMode(o.value)}
-                className={rankMode === o.value ? chipActive : chipIdle}>
-                {o.label}
+                onClick={() => {
+                  setGroup(o.value);
+                  // One-time convenience default: Scale is read by revenue
+                  // volume first. The buyer can change the sort afterward.
+                  if (o.value === "Scale") {
+                    setSortKey("revenue");
+                    setSortDir("desc");
+                  }
+                }}
+                className={group === o.value ? chipActive : chipIdle}>
+                {o.label} ({groupCounts[o.value]})
               </button>
             ))}
+            {group !== "ALL" && statusFilter !== "ALL" && (
+              <span className='text-muted-foreground'>
+                (showing {statusFilter === "ACTIVE" ? "Active" : "Paused"} only
+                — set Status to All for every match)
+              </span>
+            )}
           </div>
         </div>
 
         <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
           {/* Sort */}
-          <div
-            className={cn(
-              "flex items-center gap-1.5",
-              rankMode !== "manual" && "opacity-60",
-            )}>
+          <div className='flex items-center gap-1.5'>
             <span className='text-muted-foreground'>Sort</span>
             {SORT_OPTIONS.map((o) => (
               <button
@@ -1632,55 +1604,7 @@ export function CreativesView({
               title={sortDir === "asc" ? "Ascending" : "Descending"}>
               {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
             </button>
-            {rankMode !== "manual" && (
-              <span className='text-muted-foreground'>
-                (overridden by ranking)
-              </span>
-            )}
-            {rankMode !== "manual" && statusFilter !== "ALL" && (
-              <span className='text-muted-foreground'>
-                (showing {statusFilter === "ACTIVE" ? "Active" : "Paused"} only
-                — set Status to All for every match)
-              </span>
-            )}
           </div>
-
-          {/* Then by — secondary sort, Manual mode only */}
-          {rankMode === "manual" && (
-            <div className='flex items-center gap-1.5'>
-              <span className='text-muted-foreground'>Then by</span>
-              <button
-                type='button'
-                onClick={() => setSecondarySortKey("none")}
-                className={secondarySortKey === "none" ? chipActive : chipIdle}>
-                None
-              </button>
-              {SORT_OPTIONS.map((o) => (
-                <button
-                  key={o.value}
-                  type='button'
-                  onClick={() => setSecondarySortKey(o.value)}
-                  className={
-                    secondarySortKey === o.value ? chipActive : chipIdle
-                  }>
-                  {o.label}
-                </button>
-              ))}
-              {secondarySortKey !== "none" && (
-                <button
-                  type='button'
-                  onClick={() =>
-                    setSecondarySortDir((d) => (d === "asc" ? "desc" : "asc"))
-                  }
-                  className={chipIdle}
-                  title={
-                    secondarySortDir === "asc" ? "Ascending" : "Descending"
-                  }>
-                  {secondarySortDir === "asc" ? "↑ Asc" : "↓ Desc"}
-                </button>
-              )}
-            </div>
-          )}
 
           {/* Type */}
           <div className='flex items-center gap-1.5'>
@@ -1801,6 +1725,7 @@ export function CreativesView({
               currency={currency}
               metrics={metrics}
               verdict={verdictById.get(c.id) ?? null}
+              flag={flagById.get(c.id) ?? null}
               onOpen={() => setSelected(c)}
             />
           ))}
