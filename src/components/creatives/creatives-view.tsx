@@ -289,6 +289,51 @@ const RANK_OPTIONS: ReadonlyArray<{ value: RankMode; label: string }> = [
 
 type ActiveRankMode = Exclude<RankMode, "manual">;
 
+// ---------------------------------------------------------------------------
+// Per-card verdict — copied from creative-report/route.ts `deriveVerdict`
+// (deliberately NOT imported this phase, same convention as the constants and
+// isFatigued copies above; the route stays frozen). Keep in sync manually if
+// the report's precedence or thresholds change. Precedence, in order:
+// Kill → Refresh → Scale → Hold/Watch (fatigue outranks scale).
+// ---------------------------------------------------------------------------
+
+type Verdict = "Scale" | "Refresh" | "Kill" | "Hold/Watch";
+
+const VERDICT_VARIANT: Record<
+  Verdict,
+  "success" | "warning" | "destructive" | "muted"
+> = {
+  Scale: "success",
+  Refresh: "warning",
+  Kill: "destructive",
+  "Hold/Watch": "muted",
+};
+
+function deriveVerdict(
+  agg: Aggregate,
+  spendShare: number,
+  fatigued: boolean,
+  medianRoas: number,
+): Verdict {
+  // Kill: non-trivial spend (>= KILL_MIN_SPEND) with zero purchases.
+  if (agg.spend >= KILL_MIN_SPEND && agg.purchases === 0) return "Kill";
+  // Refresh: a fatigue trend is present (outranks Scale).
+  if (fatigued) return "Refresh";
+  // Scale: spend-share path OR efficiency path — identical guards to the
+  // `scale` rank-mode membership above, including the medianRoas > 0 guard.
+  if (spendShare >= SCALE_MIN_SPEND_SHARE && agg.roas > medianRoas) {
+    return "Scale";
+  }
+  if (
+    medianRoas > 0 &&
+    agg.roas >= medianRoas * SCALE_ROAS_MEDIAN_MULT &&
+    agg.purchases >= SCALE_MIN_PURCHASES
+  ) {
+    return "Scale";
+  }
+  return "Hold/Watch";
+}
+
 /**
  * Membership test: does a creative belong to the given ranking mode? Mirrors
  * the verdict guards in creative-report/route.ts exactly. `spendShare` is the
@@ -952,12 +997,14 @@ function CreativeCard({
   agg,
   currency,
   metrics,
+  verdict,
   onOpen,
 }: {
   item: CreativeItem;
   agg: Aggregate;
   currency: string;
   metrics: ReadonlySet<MetricKey>;
+  verdict: Verdict | null;
   onOpen: () => void;
 }) {
   const allChips: Array<{ key: MetricKey; label: string; value: string }> = [
@@ -1024,6 +1071,9 @@ function CreativeCard({
             <Badge variant={statusVariant(item.status)} withDot>
               {isActive(item.status) ? "Active" : "Paused"}
             </Badge>
+          )}
+          {verdict && (
+            <Badge variant={VERDICT_VARIANT[verdict]}>{verdict}</Badge>
           )}
         </div>
       </button>
@@ -1230,6 +1280,26 @@ export function CreativesView({
     return { totalSpend: total, medianRoas: median };
   }, [creatives, aggById]);
 
+  // Verdict per creative, over the currently selected grid window. At the
+  // default 30d preset this matches the PDF report's verdict exactly; at
+  // other windows the chip reflects the selected window by design. Only
+  // creatives that spent in the window get a verdict — the report builds its
+  // rows from spenders only (`agg.spend <= 0` is skipped there), so zero-spend
+  // creatives consistently show no chip rather than a made-up Hold/Watch.
+  const verdictById = React.useMemo(() => {
+    const m = new Map<string, Verdict>();
+    for (const c of creatives) {
+      const a = aggById.get(c.id);
+      if (!a || a.spend <= 0) continue;
+      const spendShare = totalSpend > 0 ? a.spend / totalSpend : 0;
+      const fatigued = isFatigued(
+        withinRange(c.daily, gridWindow.start, gridWindow.end),
+      );
+      m.set(c.id, deriveVerdict(a, spendShare, fatigued, medianRoas));
+    }
+    return m;
+  }, [creatives, aggById, totalSpend, medianRoas, gridWindow]);
+
   // KPI strip — over creatives that actually spent in the window.
   const kpis = React.useMemo(() => {
     const withSpend = creatives.filter(
@@ -1303,15 +1373,23 @@ export function CreativesView({
           medianRoas,
         );
       });
-      return members
-        .slice()
-        .sort((x, y) =>
-          compareInRankMode(
-            rankMode,
-            { id: x.id, agg: aggById.get(x.id)! },
-            { id: y.id, agg: aggById.get(y.id)! },
-          ),
+      return members.slice().sort((x, y) => {
+        // Demotion within Best to Scale: scale-qualified but fatigued
+        // members (verdict Refresh) sort after all non-fatigued members.
+        // Membership is unchanged — they stay in the list, chip-flagged —
+        // and the existing ROAS-desc ordering + id tie-break is preserved
+        // within each group.
+        if (rankMode === "scale") {
+          const dx = verdictById.get(x.id) === "Refresh" ? 1 : 0;
+          const dy = verdictById.get(y.id) === "Refresh" ? 1 : 0;
+          if (dx !== dy) return dx - dy;
+        }
+        return compareInRankMode(
+          rankMode,
+          { id: x.id, agg: aggById.get(x.id)! },
+          { id: y.id, agg: aggById.get(y.id)! },
         );
+      });
     }
 
     const dir = sortDir === "asc" ? 1 : -1;
@@ -1345,6 +1423,7 @@ export function CreativesView({
     rankMode,
     totalSpend,
     medianRoas,
+    verdictById,
   ]);
 
   const toggleMetric = (key: MetricKey) => {
@@ -1655,6 +1734,7 @@ export function CreativesView({
               agg={aggById.get(c.id)!}
               currency={currency}
               metrics={metrics}
+              verdict={verdictById.get(c.id) ?? null}
               onOpen={() => setSelected(c)}
             />
           ))}
