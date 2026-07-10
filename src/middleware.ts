@@ -8,6 +8,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/meta/oauth/callback",
   "/api/cron/purge-meta-oauth-sessions",
   "/api/cron/sync-all",
+  "/api/cron/rotate-tokens",
 ]);
 
 const isClerkConfigured = Boolean(
