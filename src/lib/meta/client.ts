@@ -377,7 +377,7 @@ export class MetaClient {
       {
         fields:
           "id,name,adset_id,campaign_id,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id,body,title,call_to_action_type,object_type,object_story_id,effective_object_story_id,image_hash}",
-        limit: "500",
+        limit: "100",
       },
       `/${adAccountId}/ads`,
     );
