@@ -31,8 +31,12 @@ export default async function ClientsPage() {
         industry: true,
         logoUrl: true,
         health: true,
+        status: true,
         monthlyBudget: true,
         minRoas: true,
+        minCpa: true,
+        maxCpa: true,
+        notes: true,
       },
       orderBy: { name: "asc" },
     }),
@@ -107,6 +111,11 @@ export default async function ClientsPage() {
       monthlyBudget: budget,
       pacing,
       roas,
+      status: c.status,
+      minRoas: c.minRoas === null ? null : num(c.minRoas),
+      minCpa: c.minCpa === null ? null : num(c.minCpa),
+      maxCpa: c.maxCpa === null ? null : num(c.maxCpa),
+      notes: c.notes,
     };
   });
 
