@@ -84,6 +84,13 @@ export interface AnalysisResult {
     roas: KpiValue;
     purchaseValue: KpiValue;
   };
+  /** Client KPI targets (nullable) — read-only, for on/off-target context. */
+  targets: {
+    minRoas: number | null;
+    minCpa: number | null;
+    maxCpa: number | null;
+    monthlyBudget: number | null;
+  };
   timeSeries: TimeSeriesPoint[];
   breakdown: BreakdownRow[];
   /** Accurate totals across ALL entities at the selected level (for "Others"). */
@@ -125,10 +132,34 @@ export async function getClientAnalysis(
   // ---------------------------------------------------------------------------
   // Resolve account scope: connections (currency/timezone) + campaign/ad IDs.
   // ---------------------------------------------------------------------------
-  const connections = await db.adAccountConnection.findMany({
-    where: { clientId },
-    select: { id: true, accountName: true, currency: true, timezone: true },
-  });
+  const [connections, clientTargetRow] = await Promise.all([
+    db.adAccountConnection.findMany({
+      where: { clientId },
+      select: { id: true, accountName: true, currency: true, timezone: true },
+    }),
+    db.client.findUnique({
+      where: { id: clientId },
+      select: {
+        minRoas: true,
+        minCpa: true,
+        maxCpa: true,
+        monthlyBudget: true,
+      },
+    }),
+  ]);
+
+  const targets = {
+    minRoas:
+      clientTargetRow?.minRoas != null ? Number(clientTargetRow.minRoas) : null,
+    minCpa:
+      clientTargetRow?.minCpa != null ? Number(clientTargetRow.minCpa) : null,
+    maxCpa:
+      clientTargetRow?.maxCpa != null ? Number(clientTargetRow.maxCpa) : null,
+    monthlyBudget:
+      clientTargetRow?.monthlyBudget != null
+        ? Number(clientTargetRow.monthlyBudget)
+        : null,
+  };
 
   const fallbackCurrency = "USD";
   const currency = connections[0]?.currency ?? fallbackCurrency;
@@ -150,6 +181,7 @@ export async function getClientAnalysis(
       roas: { current: 0, previous: 0 },
       purchaseValue: { current: 0, previous: 0 },
     },
+    targets,
     timeSeries: [],
     breakdown: [],
     breakdownTotals: { spend: 0, purchases: 0 },
@@ -390,6 +422,7 @@ export async function getClientAnalysis(
     range: { start: isoUTC(start), end: isoUTC(end), days },
     prevRange: { start: isoUTC(prevStart), end: isoUTC(prevEnd) },
     kpis,
+    targets,
     timeSeries,
     breakdown,
     breakdownTotals,

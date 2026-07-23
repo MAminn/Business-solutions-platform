@@ -24,6 +24,7 @@ import {
   formatMultiplier,
   formatInt,
   formatDelta,
+  formatPercentRaw,
 } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -143,6 +144,25 @@ export default async function ClientAnalysisPage({
 
   const { range, kpis } = analysis;
 
+  // Inline target context (rendered only when the relevant target is set).
+  const { targets } = analysis;
+
+  let roasTarget: string | undefined;
+  let roasWarning = false;
+  if (targets.minRoas !== null) {
+    const onTarget = kpis.roas.current >= targets.minRoas;
+    roasTarget = `Target ≥ ${formatMultiplier(targets.minRoas)} · ${
+      onTarget ? "On target" : "Under target"
+    }`;
+    roasWarning = !onTarget;
+  }
+
+  let spendTarget: string | undefined;
+  if (targets.monthlyBudget !== null && targets.monthlyBudget > 0) {
+    const pct = (kpis.spend.current / targets.monthlyBudget) * 100;
+    spendTarget = `${formatPercentRaw(pct, 0)} of monthly budget`;
+  }
+
   const purchasesData = topWithOthers(
     analysis.breakdown,
     "purchases",
@@ -190,6 +210,7 @@ export default async function ClientAnalysisPage({
           value={formatCurrency(kpis.spend.current, currency)}
           delta={buildDelta(kpis.spend.current, kpis.spend.previous)}
           sub={prevLabel}
+          target={spendTarget}
         />
         <OverviewMetricCard
           label='Purchases (Meta-reported)'
@@ -202,6 +223,8 @@ export default async function ClientAnalysisPage({
           value={formatMultiplier(kpis.roas.current)}
           delta={buildDelta(kpis.roas.current, kpis.roas.previous)}
           sub={prevLabel}
+          target={roasTarget}
+          warning={roasWarning}
         />
         <OverviewMetricCard
           label='Meta Purchase Value'
