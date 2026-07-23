@@ -4,7 +4,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ArrowRight } from "lucide-react";
-import { formatMultiplier } from "@/lib/format";
+import { formatMultiplier, formatCurrencyCompact } from "@/lib/format";
 import { paceState, type PaceState } from "@/lib/dashboard-flags";
 import type { ClientHealth } from "@prisma/client";
 
@@ -16,6 +16,9 @@ interface ActiveClient {
   pacing: number; // 0..100
   roas: number;
   isStale: boolean;
+  mtdSpend: number;
+  monthlyBudget: number;
+  funding?: { amount: number; currency: string };
 }
 
 const healthBadge: Record<
@@ -87,6 +90,38 @@ export function ActiveClients({ clients }: { clients: ActiveClient[] }) {
                   <p className='truncate text-xs text-muted-foreground'>
                     {c.industry ?? "—"}
                   </p>
+                  <div className='mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground'>
+                    <span>
+                      Spend{" "}
+                      <span className='font-medium tabular-nums text-foreground'>
+                        {formatCurrencyCompact(c.mtdSpend)}
+                      </span>
+                    </span>
+                    <span className='text-border'>·</span>
+                    <span>
+                      Budget{" "}
+                      <span className='font-medium tabular-nums text-foreground'>
+                        {formatCurrencyCompact(c.monthlyBudget)}
+                      </span>
+                    </span>
+                    {c.funding && (
+                      <>
+                        <span className='text-border'>·</span>
+                        <span>
+                          Funding{" "}
+                          <span className='font-medium tabular-nums text-foreground'>
+                            {c.funding.currency !== "USD"
+                              ? `${c.funding.currency} `
+                              : ""}
+                            {formatCurrencyCompact(
+                              c.funding.amount,
+                              c.funding.currency,
+                            )}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className='col-span-5'>

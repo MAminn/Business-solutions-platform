@@ -322,6 +322,35 @@ export default async function DashboardPage() {
     return { isStale, staleDays };
   }
 
+  // ---- Active funding cycles (per client, active-cycle rule) ------------
+  // One batched read: cycles with cancelledAt null, most recent by startedAt.
+  // Rows come back startedAt desc, so the first row seen per client is the
+  // active one (mirrors funding.ts activeCycleIndex without any writes).
+  const activeFundingCycles = await db.fundingCycle.findMany({
+    where: {
+      cancelledAt: null,
+      adAccountConnection: { clientId: { in: accessibleClientIds } },
+    },
+    orderBy: { startedAt: "desc" },
+    select: {
+      amount: true,
+      currency: true,
+      adAccountConnection: { select: { clientId: true } },
+    },
+  });
+  const fundingByClient = new Map<
+    string,
+    { amount: number; currency: string }
+  >();
+  for (const cycle of activeFundingCycles) {
+    const clientId = cycle.adAccountConnection.clientId;
+    if (fundingByClient.has(clientId)) continue; // first row = most recent active
+    fundingByClient.set(clientId, {
+      amount: num(cycle.amount),
+      currency: cycle.currency,
+    });
+  }
+
   const activeClientsList: Array<{
     id: string;
     name: string;
@@ -330,6 +359,9 @@ export default async function DashboardPage() {
     pacing: number;
     roas: number;
     isStale: boolean;
+    mtdSpend: number;
+    monthlyBudget: number;
+    funding?: { amount: number; currency: string };
   }> = [];
   const flagClients: DashboardFlagClient[] = [];
   for (const c of clientsForList) {
@@ -348,6 +380,9 @@ export default async function DashboardPage() {
       pacing,
       roas,
       isStale,
+      mtdSpend: mtd,
+      monthlyBudget: budget,
+      funding: fundingByClient.get(c.id),
     });
     flagClients.push({
       clientId: c.id,
