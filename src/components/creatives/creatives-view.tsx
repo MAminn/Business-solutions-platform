@@ -1154,6 +1154,11 @@ export function CreativesView({
   );
   const [customStart, setCustomStart] = React.useState("");
   const [customEnd, setCustomEnd] = React.useState("");
+  // UI-only: whether the tucked-away "Filters" panel (Type / Status / Show /
+  // thresholds) is expanded. Collapsed by default; no persistence. Purely
+  // presentational — the filters themselves stay mounted and active whether
+  // this is open or closed.
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
 
   // Prefer the server-resolved canonical latest-data-date (yyyy-MM-dd string,
   // same shape latestDate returns) when provided; otherwise fall back to the
@@ -1434,6 +1439,32 @@ export function CreativesView({
   const dateInput =
     "h-7 rounded border border-border bg-background px-1.5 text-xs";
 
+  // Dominant verdict-group tabs (the primary decision control). Active state
+  // uses the frozen Voltage Lime accent token.
+  const groupTabActive =
+    "rounded-md px-4 py-2 text-sm font-semibold text-accent-foreground bg-accent transition-colors";
+  const groupTabIdle =
+    "rounded-md px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors";
+
+  // Quiet range / secondary sort chips — smaller and more muted than the
+  // group tabs so the hierarchy reads group > sort > range.
+  const quietChipActive =
+    "rounded px-2 py-0.5 text-[11px] font-medium text-foreground bg-secondary";
+  const quietChipIdle =
+    "rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
+
+  // Read-only reflection of how many filters are currently narrowing the view,
+  // derived purely from existing state (no new filter logic, no new defaults).
+  // Type≠All, Status≠its default (ACTIVE), any Show-toggle removed from the
+  // default set, or any threshold entered > 0 each count as one active filter.
+  const activeFilterCount =
+    (typeFilter !== "ALL" ? 1 : 0) +
+    (statusFilter !== "ACTIVE" ? 1 : 0) +
+    (metrics.size !== METRIC_OPTIONS.length ? 1 : 0) +
+    (Number(minRoas) > 0 ? 1 : 0) +
+    (Number(minSpend) > 0 ? 1 : 0) +
+    (Number(minCtr) > 0 ? 1 : 0);
+
   return (
     <div className='space-y-6'>
       {/* KPI strip */}
@@ -1497,67 +1528,70 @@ export function CreativesView({
 
       {/* Controls */}
       <div className='space-y-3 rounded-lg border border-border/60 bg-card/40 p-3 text-xs'>
-        <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
-          {/* Range */}
-          <div className='flex flex-wrap items-center gap-1.5'>
-            <span className='text-muted-foreground'>Range</span>
-            {RANGE_OPTIONS.map((o) => (
-              <button
-                key={o.value}
-                type='button'
-                onClick={() => {
-                  setRangeMode("preset");
-                  setGridRangeDays(o.value);
-                }}
-                className={
-                  rangeMode === "preset" && gridRangeDays === o.value
-                    ? chipActive
-                    : chipIdle
-                }>
-                {o.label}
-              </button>
-            ))}
+        {/* Tier 1 — Range (quiet context line, above the group tabs) */}
+        <div className='flex flex-wrap items-center gap-1.5'>
+          <span className='text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70'>
+            Range
+          </span>
+          {RANGE_OPTIONS.map((o) => (
             <button
+              key={o.value}
               type='button'
               onClick={() => {
-                setRangeMode("custom");
-                // Seed the custom inputs from the current preset window so
-                // entering custom mode does not jump the window.
-                if (!customStart)
-                  setCustomStart(cutoffFor(resolvedAnchor, gridRangeDays));
-                if (!customEnd && resolvedAnchor) setCustomEnd(resolvedAnchor);
+                setRangeMode("preset");
+                setGridRangeDays(o.value);
               }}
-              className={rangeMode === "custom" ? chipActive : chipIdle}>
-              Custom
+              className={
+                rangeMode === "preset" && gridRangeDays === o.value
+                  ? quietChipActive
+                  : quietChipIdle
+              }>
+              {o.label}
             </button>
-            {rangeMode === "custom" && (
-              <span className='flex items-center gap-1.5'>
-                <input
-                  type='date'
-                  value={customStart}
-                  min={oldestLoaded ?? undefined}
-                  max={customEnd || resolvedAnchor || undefined}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className={dateInput}
-                  aria-label='Custom range start'
-                />
-                <span className='text-muted-foreground'>→</span>
-                <input
-                  type='date'
-                  value={customEnd}
-                  min={customStart || oldestLoaded || undefined}
-                  max={resolvedAnchor ?? undefined}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className={dateInput}
-                  aria-label='Custom range end'
-                />
-              </span>
-            )}
-          </div>
+          ))}
+          <button
+            type='button'
+            onClick={() => {
+              setRangeMode("custom");
+              // Seed the custom inputs from the current preset window so
+              // entering custom mode does not jump the window.
+              if (!customStart)
+                setCustomStart(cutoffFor(resolvedAnchor, gridRangeDays));
+              if (!customEnd && resolvedAnchor) setCustomEnd(resolvedAnchor);
+            }}
+            className={
+              rangeMode === "custom" ? quietChipActive : quietChipIdle
+            }>
+            Custom
+          </button>
+          {rangeMode === "custom" && (
+            <span className='flex items-center gap-1.5'>
+              <input
+                type='date'
+                value={customStart}
+                min={oldestLoaded ?? undefined}
+                max={customEnd || resolvedAnchor || undefined}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className={dateInput}
+                aria-label='Custom range start'
+              />
+              <span className='text-muted-foreground'>→</span>
+              <input
+                type='date'
+                value={customEnd}
+                min={customStart || oldestLoaded || undefined}
+                max={resolvedAnchor ?? undefined}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className={dateInput}
+                aria-label='Custom range end'
+              />
+            </span>
+          )}
+        </div>
 
-          {/* Group — exclusive verdict-first groups */}
-          <div className='flex flex-wrap items-center gap-1.5'>
-            <span className='text-muted-foreground'>Group</span>
+        {/* Tier 2 — Verdict groups (dominant, primary decision control) */}
+        <div className='flex flex-wrap items-center gap-x-3 gap-y-2'>
+          <div className='inline-flex flex-wrap items-center gap-1 rounded-lg border border-border bg-background/60 p-1'>
             {GROUP_OPTIONS.map((o) => (
               <button
                 key={o.value}
@@ -1571,132 +1605,178 @@ export function CreativesView({
                     setSortDir("desc");
                   }
                 }}
-                className={group === o.value ? chipActive : chipIdle}>
-                {o.label} ({groupCounts[o.value]})
+                className={group === o.value ? groupTabActive : groupTabIdle}>
+                {o.label}
+                <span
+                  className={cn(
+                    "ml-1.5 tabular-nums",
+                    group === o.value
+                      ? "text-accent-foreground/80"
+                      : "text-muted-foreground/70",
+                  )}>
+                  {groupCounts[o.value]}
+                </span>
               </button>
             ))}
-            {group !== "ALL" && statusFilter !== "ALL" && (
-              <span className='text-muted-foreground'>
-                (showing {statusFilter === "ACTIVE" ? "Active" : "Paused"} only
-                — set Status to All for every match)
-              </span>
-            )}
           </div>
+          {group !== "ALL" && statusFilter !== "ALL" && (
+            <span className='text-[11px] text-muted-foreground'>
+              (showing {statusFilter === "ACTIVE" ? "Active" : "Paused"} only —
+              set Status to All for every match)
+            </span>
+          )}
         </div>
 
-        <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
-          {/* Sort */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Sort</span>
+        {/* Tier 3 — Sort (secondary) + Filters disclosure toggle */}
+        <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-2'>
+          <div className='flex flex-wrap items-center gap-1.5'>
+            <span className='text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70'>
+              Sort
+            </span>
             {SORT_OPTIONS.map((o) => (
               <button
                 key={o.value}
                 type='button'
                 onClick={() => setSortKey(o.value)}
-                className={sortKey === o.value ? chipActive : chipIdle}>
+                className={
+                  sortKey === o.value ? quietChipActive : quietChipIdle
+                }>
                 {o.label}
               </button>
             ))}
             <button
               type='button'
               onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              className={chipIdle}
+              className={quietChipIdle}
               title={sortDir === "asc" ? "Ascending" : "Descending"}>
               {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
             </button>
           </div>
 
-          {/* Type */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Type</span>
-            {(["ALL", "IMAGE", "VIDEO"] as const).map((t) => (
-              <button
-                key={t}
-                type='button'
-                onClick={() => setTypeFilter(t)}
-                className={typeFilter === t ? chipActive : chipIdle}>
-                {t === "ALL" ? "All" : t === "IMAGE" ? "Image" : "Video"}
-              </button>
-            ))}
-          </div>
-
-          {/* Status */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Status</span>
-            {(["ALL", "ACTIVE", "PAUSED"] as const).map((s) => (
-              <button
-                key={s}
-                type='button'
-                onClick={() => setStatusFilter(s)}
-                className={statusFilter === s ? chipActive : chipIdle}>
-                {s === "ALL" ? "All" : s === "ACTIVE" ? "Active" : "Paused"}
-              </button>
-            ))}
-          </div>
+          <button
+            type='button'
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "h-7 gap-1.5 text-xs",
+            )}>
+            <span
+              aria-hidden
+              className={cn(
+                "inline-block text-[10px] leading-none transition-transform",
+                filtersOpen && "rotate-90",
+              )}>
+              ▸
+            </span>
+            Filters
+            {activeFilterCount > 0 && (
+              <span className='inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold tabular-nums text-accent-foreground'>
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
         </div>
 
-        <div className='flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/40 pt-3'>
-          {/* Metric display */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Show</span>
-            {METRIC_OPTIONS.map((o) => (
-              <button
-                key={o.value}
-                type='button'
-                onClick={() => toggleMetric(o.value)}
-                className={metrics.has(o.value) ? chipActive : chipIdle}>
-                {o.label}
-              </button>
-            ))}
-          </div>
+        {/* Filters panel — collapsed by default. Type / Status / Show /
+            thresholds live here; they stay mounted and active whether the
+            panel is open or closed. */}
+        {filtersOpen && (
+          <div className='space-y-3 border-t border-border/40 pt-3'>
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+              {/* Type */}
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>Type</span>
+                {(["ALL", "IMAGE", "VIDEO"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type='button'
+                    onClick={() => setTypeFilter(t)}
+                    className={typeFilter === t ? chipActive : chipIdle}>
+                    {t === "ALL" ? "All" : t === "IMAGE" ? "Image" : "Video"}
+                  </button>
+                ))}
+              </div>
 
-          {/* Threshold filters */}
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>ROAS ≥</span>
-            <Input
-              type='number'
-              inputMode='decimal'
-              value={minRoas}
-              onChange={(e) => setMinRoas(e.target.value)}
-              placeholder='0'
-              className={thresholdInput}
-            />
+              {/* Status */}
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>Status</span>
+                {(["ALL", "ACTIVE", "PAUSED"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type='button'
+                    onClick={() => setStatusFilter(s)}
+                    className={statusFilter === s ? chipActive : chipIdle}>
+                    {s === "ALL" ? "All" : s === "ACTIVE" ? "Active" : "Paused"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+              {/* Metric display */}
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>Show</span>
+                {METRIC_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type='button'
+                    onClick={() => toggleMetric(o.value)}
+                    className={metrics.has(o.value) ? chipActive : chipIdle}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Threshold filters */}
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>ROAS ≥</span>
+                <Input
+                  type='number'
+                  inputMode='decimal'
+                  value={minRoas}
+                  onChange={(e) => setMinRoas(e.target.value)}
+                  placeholder='0'
+                  className={thresholdInput}
+                />
+              </div>
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>Spend ≥</span>
+                <Input
+                  type='number'
+                  inputMode='decimal'
+                  value={minSpend}
+                  onChange={(e) => setMinSpend(e.target.value)}
+                  placeholder='0'
+                  className={thresholdInput}
+                />
+              </div>
+              <div className='flex items-center gap-1.5'>
+                <span className='text-muted-foreground'>CTR ≥ %</span>
+                <Input
+                  type='number'
+                  inputMode='decimal'
+                  value={minCtr}
+                  onChange={(e) => setMinCtr(e.target.value)}
+                  placeholder='0'
+                  className={thresholdInput}
+                />
+              </div>
+              {(minRoas || minSpend || minCtr) && (
+                <button
+                  type='button'
+                  onClick={() => {
+                    setMinRoas("");
+                    setMinSpend("");
+                    setMinCtr("");
+                  }}
+                  className={chipIdle}>
+                  Clear thresholds
+                </button>
+              )}
+            </div>
           </div>
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>Spend ≥</span>
-            <Input
-              type='number'
-              inputMode='decimal'
-              value={minSpend}
-              onChange={(e) => setMinSpend(e.target.value)}
-              placeholder='0'
-              className={thresholdInput}
-            />
-          </div>
-          <div className='flex items-center gap-1.5'>
-            <span className='text-muted-foreground'>CTR ≥ %</span>
-            <Input
-              type='number'
-              inputMode='decimal'
-              value={minCtr}
-              onChange={(e) => setMinCtr(e.target.value)}
-              placeholder='0'
-              className={thresholdInput}
-            />
-          </div>
-          {(minRoas || minSpend || minCtr) && (
-            <button
-              type='button'
-              onClick={() => {
-                setMinRoas("");
-                setMinSpend("");
-                setMinCtr("");
-              }}
-              className={chipIdle}>
-              Clear thresholds
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Missing-insights notice */}
