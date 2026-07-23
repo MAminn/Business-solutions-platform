@@ -17,12 +17,35 @@ interface ChartPoint {
   spend: number;
 }
 
+/** Compact axis/tooltip formatter. Uses the passed currency when present;
+ * falls back to a symbol-less compact number for mixed/unknown currencies. */
+function formatSpend(value: number, currency: string | null): string {
+  if (currency) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }).format(value);
+    } catch {
+      // fall through to symbol-less
+    }
+  }
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 export function SpendRoasChart({
   data,
+  currency = null,
   title = "Spend & ROAS — last 30 days",
   subtitle = "Aggregated across all clients",
 }: {
   data: ChartPoint[];
+  currency?: string | null;
   title?: string;
   subtitle?: string;
 }) {
@@ -62,7 +85,7 @@ export function SpendRoasChart({
               tick={{ fontSize: 11 }}
             />
             <YAxis
-              tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`}
+              tickFormatter={(v) => formatSpend(v as number, currency)}
               tickLine={false}
               axisLine={false}
               tick={{ fontSize: 11 }}
@@ -78,7 +101,23 @@ export function SpendRoasChart({
               labelFormatter={(v) =>
                 format(new Date(v as string), "MMM d, yyyy")
               }
-              formatter={(v: number) => [`$${v.toLocaleString()}`, "Spend"]}
+              formatter={(v: number) => {
+                if (currency) {
+                  try {
+                    return [
+                      new Intl.NumberFormat("en-US", {
+                        style: "currency",
+                        currency,
+                        maximumFractionDigits: 0,
+                      }).format(v),
+                      "Spend",
+                    ];
+                  } catch {
+                    // fall through to symbol-less
+                  }
+                }
+                return [v.toLocaleString(), "Spend"];
+              }}
             />
             <Area
               type='monotone'

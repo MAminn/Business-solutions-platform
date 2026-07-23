@@ -18,6 +18,7 @@ interface ActiveClient {
   isStale: boolean;
   mtdSpend: number;
   monthlyBudget: number;
+  currency: string | null;
   funding?: { amount: number; currency: string };
 }
 
@@ -94,14 +95,17 @@ export function ActiveClients({ clients }: { clients: ActiveClient[] }) {
                     <span>
                       Spend{" "}
                       <span className='font-medium tabular-nums text-foreground'>
-                        {formatCurrencyCompact(c.mtdSpend)}
+                        {formatCurrencyCompact(c.mtdSpend, c.currency ?? "")}
                       </span>
                     </span>
                     <span className='text-border'>·</span>
                     <span>
                       Budget{" "}
                       <span className='font-medium tabular-nums text-foreground'>
-                        {formatCurrencyCompact(c.monthlyBudget)}
+                        {formatCurrencyCompact(
+                          c.monthlyBudget,
+                          c.currency ?? "",
+                        )}
                       </span>
                     </span>
                     {c.funding && (
@@ -110,9 +114,6 @@ export function ActiveClients({ clients }: { clients: ActiveClient[] }) {
                         <span>
                           Funding{" "}
                           <span className='font-medium tabular-nums text-foreground'>
-                            {c.funding.currency !== "USD"
-                              ? `${c.funding.currency} `
-                              : ""}
                             {formatCurrencyCompact(
                               c.funding.amount,
                               c.funding.currency,

@@ -1,11 +1,19 @@
-/** Compact currency, e.g. $357.2k, $1.2M */
+/** Compact currency, e.g. $357.2K, EGP 198.0K, $1.2M */
 export function formatCurrencyCompact(value: number, currency = "USD"): string {
-  const abs = Math.abs(value);
-  const sign = value < 0 ? "-" : "";
-  const symbol = currency === "USD" ? "$" : "";
-  if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${sign}${symbol}${(abs / 1_000).toFixed(1)}k`;
-  return `${sign}${symbol}${abs.toFixed(0)}`;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value);
+  } catch {
+    // Unknown/invalid ISO code — plain compact number, no symbol.
+    return new Intl.NumberFormat("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value);
+  }
 }
 
 /** Full currency, e.g. $18,420 */

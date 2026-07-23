@@ -163,7 +163,7 @@ export default async function DashboardPage() {
     }),
     db.adAccountConnection.findMany({
       where: { clientId: { in: accessibleClientIds } },
-      select: { clientId: true, insightsBackfilledAt: true },
+      select: { clientId: true, currency: true, insightsBackfilledAt: true },
     }),
     db.insightsDaily.groupBy({
       by: ["entityId"],
@@ -300,6 +300,27 @@ export default async function DashboardPage() {
       backfilledByClient.set(conn.clientId, null);
     }
   }
+
+  // ---- Currency derivation (presentation only, no FX) -------------------
+  // Per-client connection currency (null when a single client somehow spans
+  // multiple currencies) and a portfolio-wide currency that is only set when
+  // every accessible connection shares one currency. Mixed/none → null so we
+  // never label a cross-currency sum with a single symbol.
+  const currencyByClient = new Map<string, string | null>();
+  const distinctCurrencies = new Set<string>();
+  for (const conn of connectionsFreshness) {
+    distinctCurrencies.add(conn.currency);
+    const existing = currencyByClient.get(conn.clientId);
+    if (existing === undefined)
+      currencyByClient.set(conn.clientId, conn.currency);
+    else if (existing !== conn.currency)
+      currencyByClient.set(conn.clientId, null);
+  }
+  const portfolioCurrency: string | null =
+    distinctCurrencies.size === 1
+      ? (distinctCurrencies.values().next().value ?? null)
+      : null;
+
   const latestDateByClient = new Map<string, Date>();
   for (const row of latestDataByCampaign) {
     const clientId = campaignToClient.get(row.entityId);
@@ -361,6 +382,7 @@ export default async function DashboardPage() {
     isStale: boolean;
     mtdSpend: number;
     monthlyBudget: number;
+    currency: string | null;
     funding?: { amount: number; currency: string };
   }> = [];
   const flagClients: DashboardFlagClient[] = [];
@@ -382,6 +404,7 @@ export default async function DashboardPage() {
       isStale,
       mtdSpend: mtd,
       monthlyBudget: budget,
+      currency: currencyByClient.get(c.id) ?? null,
       funding: fundingByClient.get(c.id),
     });
     flagClients.push({
@@ -450,7 +473,15 @@ export default async function DashboardPage() {
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'>
         <KpiCard
           label='Spend Under Management'
-          value={formatCurrencyCompact(spend30)}
+          value={
+            portfolioCurrency
+              ? formatCurrencyCompact(spend30, portfolioCurrency)
+              : new Intl.NumberFormat("en-US", {
+                  notation: "compact",
+                  maximumFractionDigits: 1,
+                }).format(spend30)
+          }
+          caption={portfolioCurrency ? undefined : "Mixed currencies"}
           delta={{
             value: formatDelta(spendDeltaPct),
             label: "vs prev 30d",
@@ -485,7 +516,7 @@ export default async function DashboardPage() {
       {/* Chart + Urgent tasks */}
       <div className='grid grid-cols-1 gap-4 lg:grid-cols-3'>
         <div className='lg:col-span-2'>
-          <SpendRoasChart data={chartData} />
+          <SpendRoasChart data={chartData} currency={portfolioCurrency} />
         </div>
         <UrgentTasks tasks={urgentTasks} />
       </div>
