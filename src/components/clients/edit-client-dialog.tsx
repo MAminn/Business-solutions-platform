@@ -105,6 +105,7 @@ export function EditClientDialog({
   const [minCpa, setMinCpa] = React.useState(toInput(client.minCpa));
   const [maxCpa, setMaxCpa] = React.useState(toInput(client.maxCpa));
   const [notes, setNotes] = React.useState(client.notes ?? "");
+  const [status, setStatus] = React.useState<ClientStatus>(client.status);
 
   const [errors, setErrors] = React.useState<ClientFormState["errors"]>({});
   const [isPending, startTransition] = React.useTransition();
@@ -120,6 +121,7 @@ export function EditClientDialog({
     setMinCpa(toInput(client.minCpa));
     setMaxCpa(toInput(client.maxCpa));
     setNotes(client.notes ?? "");
+    setStatus(client.status);
     setErrors({});
   }, [open, client]);
 
@@ -138,8 +140,9 @@ export function EditClientDialog({
         minCpa,
         maxCpa,
         notes,
-        // Passed straight through, unchanged — no editing UI for these.
-        status: client.status,
+        // Selected by the user in the dialog.
+        status,
+        // Passed straight through, unchanged — health stays derived.
         health: client.health,
       });
 
@@ -173,6 +176,23 @@ export function EditClientDialog({
               errors={fieldErrors.name}
             />
             <div className='grid grid-cols-1 gap-5 md:grid-cols-2'>
+              <div className='space-y-1.5'>
+                <Label htmlFor='edit-client-status'>Status</Label>
+                <select
+                  id='edit-client-status'
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as ClientStatus)}
+                  className={cn(
+                    "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    "disabled:cursor-not-allowed disabled:opacity-50",
+                  )}>
+                  <option value='ACTIVE'>Active</option>
+                  <option value='PAUSED'>Paused</option>
+                  <option value='CHURNED'>Churned</option>
+                  <option value='PROSPECT'>Prospect</option>
+                </select>
+              </div>
               <Field
                 id='edit-client-industry'
                 label='Industry'
