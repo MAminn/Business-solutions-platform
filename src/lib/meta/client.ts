@@ -201,10 +201,31 @@ export interface MetaInsight {
   }>;
 }
 
+/**
+ * Dimensional breakdowns supported by `getAccountInsightsWithBreakdown`.
+ * Deliberately narrow — only `publisher_platform` is wired up today.
+ */
+export type MetaBreakdown = "publisher_platform";
+
+/**
+ * An insights row returned with a `breakdowns` parameter. Carries the
+ * breakdown key alongside the metrics so callers can map a row to its
+ * dimension value.
+ */
+export interface MetaBreakdownInsight extends MetaInsight {
+  publisher_platform?: string;
+}
+
 // Shared insights field list, used for both per-entity and account-level pulls
 // so the persisted shape stays identical regardless of fetch strategy.
 const INSIGHTS_FIELDS =
   "impressions,reach,clicks,spend,ctr,cpc,cpm,frequency,actions,action_values,purchase_roas,video_play_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p100_watched_actions";
+
+// Field list for breakdown pulls. Intentionally narrower than INSIGHTS_FIELDS:
+// reach/frequency are non-additive across breakdown values and are therefore
+// neither fetched nor stored (see the InsightsBreakdownDaily model comment).
+const BREAKDOWN_INSIGHTS_FIELDS =
+  "spend,impressions,clicks,actions,action_values,date_start,date_stop";
 
 export class MetaClient {
   private readonly graphUrl: string;
@@ -450,6 +471,38 @@ export class MetaClient {
     }
 
     return rows;
+  }
+
+  /**
+   * Account-level insights split by a dimensional `breakdowns` value
+   * (e.g. `publisher_platform`).
+   *
+   * One paginated call for the whole ad account, reusing `getAllPages` so the
+   * existing cursor handling, 150ms inter-call spacing and MetaRateLimitError
+   * behaviour apply unchanged. Returned rows carry the breakdown key (e.g.
+   * `publisher_platform`) alongside the metrics.
+   *
+   * Read-only and completely separate from the entity-level insights pipeline.
+   */
+  async getAccountInsightsWithBreakdown(
+    adAccountId: string,
+    breakdown: MetaBreakdown,
+    sinceDate: string,
+    untilDate: string,
+  ): Promise<MetaBreakdownInsight[]> {
+    return this.getAllPages<MetaBreakdownInsight>(
+      `/${adAccountId}/insights`,
+      {
+        level: "account",
+        time_increment: "1",
+        time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
+        breakdowns: breakdown,
+        fields: BREAKDOWN_INSIGHTS_FIELDS,
+        action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+        limit: "500",
+      },
+      `/${adAccountId}/insights (breakdown=${breakdown})`,
+    );
   }
 
   /**
