@@ -564,6 +564,49 @@ model InsightsDaily {
   @@index([date])
 }
 
+enum BreakdownDimension {
+  PUBLISHER_PLATFORM
+  PLATFORM_POSITION
+  IMPRESSION_DEVICE
+  GENDER
+  AGE
+  COUNTRY
+  REGION
+}
+
+// Dimensional breakdown insights (placement / platform / gender / age / device / geo).
+// Mirrors the polymorphic style of InsightsDaily (no FK relation, same Decimal precisions).
+//
+// (a) ROAS/CPA are deliberately NOT stored. They are derived at query time from
+//     spend / purchases / conversionValue, matching how Analysis already computes them,
+//     so there is never a second source of truth for those ratios.
+// (b) `reach` and `frequency` are deliberately NOT stored because they are non-additive
+//     across breakdown values — summing reach across platforms double-counts people.
+// (c) Breakdown totals may not reconcile exactly with entity-level InsightsDaily totals.
+//     This data is a split for comparison, never a restatement of account totals.
+model InsightsBreakdownDaily {
+  id              String             @id @default(cuid())
+  entityType      InsightEntity
+  entityId        String             // internal ID (AdAccountConnection.id / Campaign.id / Ad.id)
+  date            DateTime           @db.Date
+  dimension       BreakdownDimension
+  value           String             // Meta's breakdown value, e.g. "facebook", "female", "25-34"
+
+  impressions     Int                @default(0)
+  clicks          Int                @default(0)
+  spend           Decimal            @default(0) @db.Decimal(12, 2)
+  purchases       Int                @default(0)
+  conversionValue Decimal            @default(0) @db.Decimal(12, 2)
+
+  raw             Json?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([entityType, entityId, date, dimension, value])
+  @@index([entityType, entityId, dimension, date])
+  @@index([dimension, date])
+}
+
 // ============================================================================
 // WORKFLOW: alerts, tasks, recommendations, reports
 // ============================================================================
