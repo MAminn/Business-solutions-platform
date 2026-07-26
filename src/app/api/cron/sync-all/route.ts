@@ -163,6 +163,38 @@ export async function GET(req: NextRequest) {
     `[sync-all] mode=${runMode} done total=${results.length} synced=${synced} skipped=${skipped} failed=${failed}`,
   );
 
+  // --- External dead-man's-switch heartbeat --------------------------------
+  // No in-app check can detect its own scheduler failing to fire (Coolify
+  // silently stopped running this route for 15 days in July 2026, causing a
+  // 13-day insights gap). So after every completed run we ping an external
+  // monitor (healthchecks.io). The monitor alerts when pings *stop* — that
+  // absence is the signal, and detection therefore lives outside our
+  // infrastructure. Entirely optional and strictly non-fatal: an unset URL is
+  // skipped, and any ping error is swallowed so it can never change the HTTP
+  // response, the results array, or any connection's sync outcome.
+  //
+  // The ping URL is a capability URL (anyone holding it can forge a heartbeat)
+  // and is therefore treated as a secret — it is never logged.
+  const heartbeatUrl =
+    runMode === "insights"
+      ? process.env.HEARTBEAT_PING_URL_INSIGHTS
+      : process.env.HEARTBEAT_PING_URL_FULL;
+
+  if (!heartbeatUrl) {
+    console.log(
+      `[sync-all] heartbeat ping skipped (not configured) mode=${runMode}`,
+    );
+  } else {
+    try {
+      await fetch(heartbeatUrl, { signal: AbortSignal.timeout(5000) });
+      console.log(`[sync-all] heartbeat ping sent mode=${runMode}`);
+    } catch (err) {
+      console.error(
+        `[sync-all] heartbeat ping failed (non-fatal) mode=${runMode} error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     mode: runMode,
