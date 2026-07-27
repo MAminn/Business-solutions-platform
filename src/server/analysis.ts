@@ -1,4 +1,4 @@
-import { InsightEntity } from "@prisma/client";
+import { BreakdownDimension, InsightEntity } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   dayUTC,
@@ -69,6 +69,33 @@ export interface FatigueHint {
   note: string | null;
 }
 
+/**
+ * One Meta `publisher_platform` value (facebook / instagram / audience_network
+ * / threads / unknown). ACCOUNT level only — this split is independent of the
+ * Account/Campaign/Ad level switch.
+ */
+export interface PlatformBreakdownRow {
+  platform: string; // Meta's value, e.g. "facebook", "instagram", "unknown"
+  spend: number;
+  purchases: number;
+  conversionValue: number;
+  roas: number; // conversionValue / spend, 0 when spend is 0
+  cpa: number; // spend / purchases, 0 when purchases is 0
+  spendShare: number; // share of platform-total spend, 0–1
+}
+
+export interface PlatformBreakdown {
+  rows: PlatformBreakdownRow[]; // sorted by spend desc
+  totalSpend: number;
+  totalPurchases: number;
+  /** Distinct in-range dates that have platform rows. */
+  daysPresent: number;
+  /** Days in the selected Analysis range. */
+  daysInRange: number;
+  /** True when daysPresent === daysInRange. */
+  coverageComplete: boolean;
+}
+
 export interface AnalysisResult {
   hasData: boolean;
   currency: string;
@@ -96,6 +123,12 @@ export interface AnalysisResult {
   /** Accurate totals across ALL entities at the selected level (for "Others"). */
   breakdownTotals: { spend: number; purchases: number };
   fatigue: FatigueHint;
+  /**
+   * Meta publisher_platform split, ACCOUNT level. Null only when the client
+   * has no connections / no data at all; otherwise populated, with an empty
+   * `rows` array when nothing is stored for the selected range.
+   */
+  platformBreakdown: PlatformBreakdown | null;
 }
 
 function num(value: unknown): number {
@@ -186,6 +219,7 @@ export async function getClientAnalysis(
     breakdown: [],
     breakdownTotals: { spend: 0, purchases: 0 },
     fatigue: { ctrTrendPct: null, frequencyTrendPct: null, note: null },
+    platformBreakdown: null,
   };
 
   if (connectionIds.length === 0) return emptyResult;
@@ -412,6 +446,66 @@ export async function getClientAnalysis(
       .sort((a, b) => b.spend - a.spend);
   }
 
+  // ---------------------------------------------------------------------------
+  // Platform split (Meta publisher_platform), current range only.
+  //
+  // ACCOUNT level by construction: `InsightsBreakdownDaily` only stores this
+  // dimension at ACCOUNT level, so this section is deliberately independent of
+  // `params.level` — the level switch above does NOT apply here. Read-only
+  // aggregation of already-stored rows: no Meta calls, no writes. Ratios are
+  // derived in code, never read from the DB.
+  // ---------------------------------------------------------------------------
+  const platformWhere = {
+    entityType: InsightEntity.ACCOUNT,
+    entityId: { in: connectionIds },
+    dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+    date: { gte: start, lte: end },
+  };
+
+  const [platformGrouped, platformDates] = await Promise.all([
+    db.insightsBreakdownDaily.groupBy({
+      by: ["value"],
+      where: platformWhere,
+      _sum: { spend: true, purchases: true, conversionValue: true },
+    }),
+    // Separate grouping: distinct in-range dates, for coverage reporting.
+    db.insightsBreakdownDaily.groupBy({
+      by: ["date"],
+      where: platformWhere,
+      _count: { _all: true },
+    }),
+  ]);
+
+  const platformTotalSpend = platformGrouped.reduce(
+    (s, g) => s + num(g._sum.spend),
+    0,
+  );
+  const platformRows: PlatformBreakdownRow[] = platformGrouped
+    .map((g) => {
+      const spend = num(g._sum.spend);
+      const purchases = num(g._sum.purchases);
+      const conversionValue = num(g._sum.conversionValue);
+      return {
+        platform: g.value,
+        spend,
+        purchases,
+        conversionValue,
+        roas: spend > 0 ? conversionValue / spend : 0,
+        cpa: purchases > 0 ? spend / purchases : 0,
+        spendShare: platformTotalSpend > 0 ? spend / platformTotalSpend : 0,
+      };
+    })
+    .sort((a, b) => b.spend - a.spend);
+
+  const platformBreakdown: PlatformBreakdown = {
+    rows: platformRows,
+    totalSpend: platformTotalSpend,
+    totalPurchases: platformRows.reduce((s, r) => s + r.purchases, 0),
+    daysPresent: platformDates.length,
+    daysInRange: days,
+    coverageComplete: platformDates.length === days,
+  };
+
   return {
     hasData: timeSeries.some((p) => p.spend > 0) || breakdown.length > 0,
     currency,
@@ -427,6 +521,7 @@ export async function getClientAnalysis(
     breakdown,
     breakdownTotals,
     fatigue,
+    platformBreakdown,
   };
 }
 

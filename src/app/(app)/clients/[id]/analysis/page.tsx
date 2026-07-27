@@ -5,6 +5,15 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
 import { OverviewMetricCard } from "@/components/clients/overview-metric-card";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { AnalysisToolbar } from "@/components/clients/analysis/analysis-toolbar";
 import {
   SpendTrendChart,
@@ -174,6 +183,15 @@ export default async function ClientAnalysisPage({
     analysis.breakdownTotals.spend,
   );
 
+  // Platform split is ACCOUNT level by construction and has only a handful of
+  // values, so no Top-N / "Others" bucketing. Reversed because recharts renders
+  // the first vertical bar at the bottom — largest spend ends up on top.
+  const platform = analysis.platformBreakdown;
+  const platformChartData: BreakdownDatum[] = (platform?.rows ?? [])
+    .filter((r) => r.spend > 0)
+    .map((r) => ({ name: r.platform, value: r.spend, isOthers: false }))
+    .reverse();
+
   const levelLabel = LEVEL_LABEL[level];
   const prevLabel = `vs prev ${range.days}d`;
 
@@ -253,6 +271,87 @@ export default async function ClientAnalysisPage({
           />
         </div>
       </div>
+
+      {/* Platform split — Meta publisher_platform, ACCOUNT level */}
+      {platform && (
+        <Card className='p-6'>
+          <div className='flex flex-wrap items-center gap-3'>
+            <h3 className='text-base font-semibold'>Platform split</h3>
+            <Badge variant='muted'>Meta-reported · account level</Badge>
+          </div>
+          <p className='mt-1 text-xs text-muted-foreground'>
+            Account-level split across Meta placements. This panel is{" "}
+            <span className='font-medium'>not</span> affected by the
+            Account/Campaign/Ad level switch — that switch controls the entity
+            breakdown below, not this split. Shown in {currency}.
+          </p>
+          {!platform.coverageComplete && (
+            <p className='mt-1 text-xs text-muted-foreground'>
+              Platform data covers {platform.daysPresent} of{" "}
+              {platform.daysInRange} days in this range.
+            </p>
+          )}
+
+          {platform.rows.length === 0 ? (
+            <div className='mt-4'>
+              <EmptyState
+                title='No platform breakdown data'
+                description='No platform breakdown data for this range. Platform splits are synced separately and cover a trailing 30-day window.'
+              />
+            </div>
+          ) : (
+            <div className='mt-4 grid gap-6 lg:grid-cols-2'>
+              <BreakdownBarChart
+                title='Platform by Spend'
+                subtitle='Meta-reported, account level'
+                data={platformChartData}
+                metric='spend'
+                currency={currency}
+              />
+              <div className='rounded-xl border border-border/60'>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Platform</TableHead>
+                      <TableHead className='text-right'>Spend</TableHead>
+                      <TableHead className='text-right'>Share</TableHead>
+                      <TableHead className='text-right'>Purchases</TableHead>
+                      <TableHead className='text-right'>Meta ROAS</TableHead>
+                      <TableHead className='text-right'>Meta CPA</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {platform.rows.map((r) => (
+                      <TableRow key={r.platform}>
+                        <TableCell className='font-medium'>
+                          {r.platform}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatCurrency(r.spend, currency)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatPercentRaw(r.spendShare * 100, 0)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatInt(r.purchases)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {r.spend > 0 ? formatMultiplier(r.roas) : "—"}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {r.purchases > 0
+                            ? formatCurrency(r.cpa, currency)
+                            : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Breakdown charts */}
       <div className='grid gap-6 lg:grid-cols-2'>
