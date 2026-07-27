@@ -7,6 +7,7 @@ import {
   syncInsightsIncremental,
   syncInsightsBackfill,
 } from "@/lib/meta/sync";
+import { syncPublisherPlatformBreakdown } from "@/lib/meta/sync-breakdowns";
 import { processFundAlertsForConnection } from "@/server/fund-alerts";
 
 /**
@@ -122,6 +123,52 @@ export async function GET(req: NextRequest) {
         await syncInsightsBackfill(connectionId, 30);
       } else {
         await syncInsightsIncremental(connectionId);
+      }
+
+      // (c2) Publisher-platform breakdown — "full" run mode only. A trailing
+      // 30-day platform split does not change meaningfully at the 3-hourly
+      // "insights" cadence, matching the reasoning that already excludes
+      // structural sync there.
+      //
+      // The kill switch is NOT re-checked here: syncPublisherPlatformBreakdown
+      // reads BREAKDOWN_SYNC_ENABLED itself and returns outcome "disabled"
+      // before any Meta call or DB read. Duplicating that check would let the
+      // two drift apart, so we call unconditionally and branch on the outcome
+      // for logging only.
+      //
+      // Default 30-day window (no `days` argument): the write is an upsert on
+      // the compound key, so a daily re-fetch is idempotent and self-healing —
+      // any day missed by an earlier run is repaired automatically.
+      //
+      // Own try/catch, mirroring the fund-alerts guard below: a breakdown
+      // error is logged and swallowed. It never reaches the outer catch, never
+      // changes this connection's outcome or the synced/skipped/failed counts,
+      // and never affects the response or the heartbeat.
+      if (runMode === "full") {
+        try {
+          const breakdown = await syncPublisherPlatformBreakdown(connectionId);
+          if (breakdown.outcome === "synced") {
+            const rec = breakdown.reconciliation;
+            const coverage = rec
+              ? ` coverageComplete=${rec.coverageComplete} overlapDeltaPct=${rec.overlapDeltaPct === null ? "n/a" : rec.overlapDeltaPct.toFixed(2)} warning=${rec.warning === null ? "none" : "present"}`
+              : " reconciliation=unavailable";
+            console.log(
+              `[sync-all] breakdown synced connectionId=${connectionId} fetched=${breakdown.fetched} written=${breakdown.written}${coverage}`,
+            );
+          } else if (breakdown.outcome === "disabled") {
+            console.log(
+              `[sync-all] breakdown skipped (disabled) connectionId=${connectionId}`,
+            );
+          } else {
+            console.error(
+              `[sync-all] breakdown failed (non-fatal); sync outcome unaffected connectionId=${connectionId} error=${breakdown.error ?? "unknown"}`,
+            );
+          }
+        } catch (err) {
+          console.error(
+            `[sync-all] breakdown threw (non-fatal); sync outcome unaffected connectionId=${connectionId} error=${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
       // (d) Post-sync fund alerts (Meta-reported spend). Own try/catch so an
