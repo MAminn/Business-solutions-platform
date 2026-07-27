@@ -29,6 +29,29 @@ export interface BreakdownReconciliation {
   delta: number;
   /** delta as a percentage of entitySpend; null when entitySpend is 0. */
   deltaPct: number | null;
+  /** Days in the requested window. */
+  windowDays: number;
+  /** Distinct in-window dates that have breakdown rows. */
+  breakdownDaysPresent: number;
+  /** Distinct in-window dates that have ACCOUNT-level InsightsDaily rows. */
+  entityDaysPresent: number;
+  /** Dates present on BOTH sides. */
+  overlapDays: number;
+  /** Breakdown spend summed over overlap days only. */
+  overlapBreakdownSpend: number;
+  /** Entity spend summed over overlap days only. */
+  overlapEntitySpend: number;
+  /** overlapBreakdownSpend - overlapEntitySpend. */
+  overlapDelta: number;
+  /**
+   * The honest apples-to-apples comparison: overlapDelta as a percentage of
+   * overlapEntitySpend. Null when overlapEntitySpend is 0.
+   */
+  overlapDeltaPct: number | null;
+  /** True only when both sides cover the same days and all of them overlap. */
+  coverageComplete: boolean;
+  /** Names the day shortfall when coverage is incomplete; null when complete. */
+  warning: string | null;
   note: string;
 }
 
@@ -45,10 +68,14 @@ export interface BreakdownSyncResult {
 }
 
 const RECONCILIATION_NOTE =
-  "Breakdown totals may not match entity-level totals exactly — Meta cannot " +
-  "always attribute every row to a breakdown value. A mismatch is expected " +
-  "and is NOT an error; this data is a split for comparison, never a " +
-  "restatement of account totals.";
+  "Read coverage before reading the delta. When coverageComplete is true, " +
+  "both sides cover the same days and a SMALL delta is expected — Meta " +
+  "cannot always attribute every row to a breakdown value. When " +
+  "coverageComplete is false, the full-window delta is NOT meaningful: it " +
+  "measures missing days on one side, not attribution variance — read " +
+  "overlapDeltaPct instead, which compares only the days both sides have. " +
+  "In all cases this data is a split for comparison, never a restatement of " +
+  "account totals.";
 
 /**
  * Deliberate local copy of `actionTotal` from `lib/meta/sync.ts` (it is not
@@ -210,32 +237,9 @@ export async function syncPublisherPlatformBreakdown(
   }
 
   // ---- Reconciliation (read-only, never blocking) -------------------------
-  const windowStartDate = new Date(`${sinceDate}T00:00:00.000Z`);
-  const windowEndDate = new Date(`${untilDate}T00:00:00.000Z`);
-
-  const breakdownAgg = await db.insightsBreakdownDaily.aggregate({
-    where: {
-      entityType: InsightEntity.ACCOUNT,
-      entityId: connection.id,
-      dimension: BreakdownDimension.PUBLISHER_PLATFORM,
-      date: { gte: windowStartDate, lte: windowEndDate },
-    },
-    _sum: { spend: true },
-  });
-  const entityAgg = await db.insightsDaily.aggregate({
-    where: {
-      entityType: InsightEntity.ACCOUNT,
-      entityId: connection.id,
-      date: { gte: windowStartDate, lte: windowEndDate },
-    },
-    _sum: { spend: true },
-  });
-
-  const breakdownSpend = Number(breakdownAgg._sum.spend ?? 0);
-  const entitySpend = Number(entityAgg._sum.spend ?? 0);
-  const delta = breakdownSpend - entitySpend;
-
-  return {
+  // The write above has already succeeded. Everything below is reporting only:
+  // it must never change `outcome`, never change `written`, and never throw.
+  const success: BreakdownSyncResult = {
     connectionId: connection.id,
     accountName: connection.accountName,
     outcome: "synced",
@@ -243,12 +247,108 @@ export async function syncPublisherPlatformBreakdown(
     written,
     windowStart: sinceDate,
     windowEnd: untilDate,
-    reconciliation: {
-      breakdownSpend,
-      entitySpend,
-      delta,
-      deltaPct: entitySpend === 0 ? null : (delta / entitySpend) * 100,
-      note: RECONCILIATION_NOTE,
-    },
+    reconciliation: null,
   };
+
+  try {
+    const windowStartDate = new Date(`${sinceDate}T00:00:00.000Z`);
+    const windowEndDate = new Date(`${untilDate}T00:00:00.000Z`);
+
+    // Per-day, not just totals. Comparing full-window sums without checking
+    // that both sides cover the same days is what produced the phantom +103%
+    // delta in the Phase B pilot: 30 days of breakdown data measured against
+    // 17 days of entity data (an entity-side sync gap, since repaired). Group
+    // by date so a coverage gap is reported as a coverage gap.
+    const breakdownByDay = await db.insightsBreakdownDaily.groupBy({
+      by: ["date"],
+      where: {
+        entityType: InsightEntity.ACCOUNT,
+        entityId: connection.id,
+        dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+        date: { gte: windowStartDate, lte: windowEndDate },
+      },
+      _sum: { spend: true },
+    });
+    const entityByDay = await db.insightsDaily.groupBy({
+      by: ["date"],
+      where: {
+        entityType: InsightEntity.ACCOUNT,
+        entityId: connection.id,
+        date: { gte: windowStartDate, lte: windowEndDate },
+      },
+      _sum: { spend: true },
+    });
+
+    const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+    const breakdownDays = new Map(
+      breakdownByDay.map((r) => [isoDay(r.date), Number(r._sum.spend ?? 0)]),
+    );
+    const entityDays = new Map(
+      entityByDay.map((r) => [isoDay(r.date), Number(r._sum.spend ?? 0)]),
+    );
+
+    // Full-window totals, derived from the same grouped rows so the existing
+    // fields keep their previous meaning.
+    const sum = (values: Iterable<number>) => {
+      let total = 0;
+      for (const v of values) total += v;
+      return total;
+    };
+    const breakdownSpend = sum(breakdownDays.values());
+    const entitySpend = sum(entityDays.values());
+    const delta = breakdownSpend - entitySpend;
+
+    const overlap = [...breakdownDays.keys()].filter((d) => entityDays.has(d));
+    const overlapBreakdownSpend = sum(
+      overlap.map((d) => breakdownDays.get(d)!),
+    );
+    const overlapEntitySpend = sum(overlap.map((d) => entityDays.get(d)!));
+    const overlapDelta = overlapBreakdownSpend - overlapEntitySpend;
+
+    const breakdownDaysPresent = breakdownDays.size;
+    const entityDaysPresent = entityDays.size;
+    const overlapDays = overlap.length;
+    const coverageComplete =
+      breakdownDaysPresent === entityDaysPresent &&
+      overlapDays === entityDaysPresent;
+
+    const warning = coverageComplete
+      ? null
+      : `Coverage mismatch over the ${days}-day window: breakdown data covers ` +
+        `${breakdownDaysPresent} of ${days} days, entity-level data covers ` +
+        `${entityDaysPresent} of ${days} days, and only ${overlapDays} days ` +
+        `are present on both sides. The full-window delta is dominated by the ` +
+        `days missing from one side, not by attribution variance — compare ` +
+        `overlapDeltaPct instead.`;
+
+    return {
+      ...success,
+      reconciliation: {
+        breakdownSpend,
+        entitySpend,
+        delta,
+        deltaPct: entitySpend === 0 ? null : (delta / entitySpend) * 100,
+        windowDays: days,
+        breakdownDaysPresent,
+        entityDaysPresent,
+        overlapDays,
+        overlapBreakdownSpend,
+        overlapEntitySpend,
+        overlapDelta,
+        overlapDeltaPct:
+          overlapEntitySpend === 0
+            ? null
+            : (overlapDelta / overlapEntitySpend) * 100,
+        coverageComplete,
+        warning,
+        note: RECONCILIATION_NOTE,
+      },
+    };
+  } catch (err) {
+    // A reporting failure must never turn a successful sync into a failure.
+    console.error(
+      `[sync-breakdowns] reconciliation failed (non-fatal); write outcome unaffected connectionId=${connection.id} error=${err instanceof Error ? err.message : String(err)}`,
+    );
+    return success;
+  }
 }
