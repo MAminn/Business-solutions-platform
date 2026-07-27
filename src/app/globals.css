@@ -99,6 +99,27 @@
   outline: none !important;
 }
 
+/* Tooltip text — Recharts inlines `color: entry.color || '#000'` on the item row,
+   which renders black on the dark popover. The label and the name/value spans carry
+   no inline color, so these rules win without !important. */
+.recharts-default-tooltip {
+  color: hsl(var(--popover-foreground));
+}
+.recharts-tooltip-label {
+  color: hsl(var(--popover-foreground));
+  font-weight: 500;
+  margin-bottom: 4px !important;
+}
+.recharts-tooltip-item-name,
+.recharts-tooltip-item-separator {
+  color: hsl(var(--muted-foreground));
+}
+.recharts-tooltip-item-value,
+.recharts-tooltip-item-unit {
+  color: hsl(var(--popover-foreground));
+  font-weight: 500;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

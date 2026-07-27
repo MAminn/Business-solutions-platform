@@ -45,6 +45,7 @@ function multiplier(value: number): string {
 
 const TOOLTIP_STYLE: React.CSSProperties = {
   background: "hsl(var(--popover))",
+  color: "hsl(var(--popover-foreground))",
   border: "1px solid hsl(var(--border))",
   borderRadius: 8,
   fontSize: 12,
