@@ -564,6 +564,26 @@ model InsightsDaily {
   @@index([date])
 }
 
+// Breakdown dimensions stored in InsightsBreakdownDaily.
+//
+// PLACEMENT contract (combined breakdown stored as a composite value):
+//   - PLACEMENT stores the Meta breakdown combination
+//     `publisher_platform,platform_position`. Meta rejects `platform_position`
+//     on its own; the pair is what yields the Instagram-Reels vs
+//     Instagram-Feed vs Facebook-Feed view a media buyer needs.
+//   - Its `value` is the COMPOSITE "{publisher_platform}|{platform_position}",
+//     pipe-delimited, in that order — e.g. "instagram|instagram_reels",
+//     "facebook|feed".
+//   - The pipe is a safe delimiter: Meta's values for these two dimensions
+//     contain no pipe characters.
+//   - The composite exists so the
+//     `@@unique([entityType, entityId, date, dimension, value])` key stays
+//     unchanged (no dimension2/value2, no index rebuild, no PostgreSQL
+//     NULLs-are-distinct hole) and existing PUBLISHER_PLATFORM rows are
+//     untouched.
+//   - PUBLISHER_PLATFORM and PLACEMENT are SEPARATE dimensions and therefore
+//     separate rows. Consumers must filter by `dimension`; never sum across
+//     dimensions.
 enum BreakdownDimension {
   PUBLISHER_PLATFORM
   PLATFORM_POSITION
@@ -572,6 +592,7 @@ enum BreakdownDimension {
   AGE
   COUNTRY
   REGION
+  PLACEMENT
 }
 
 // Dimensional breakdown insights (placement / platform / gender / age / device / geo).
