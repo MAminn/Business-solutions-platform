@@ -14,3 +14,7 @@ npm-debug.log*
 coverage
 *.tsbuildinfo
 next-env.d.ts
+
+# Disposable local diagnostic CSV output from probe scripts. May contain client
+# performance data — never commit.
+diagnostics/
