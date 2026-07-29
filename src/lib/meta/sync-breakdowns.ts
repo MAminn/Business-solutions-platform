@@ -1,11 +1,17 @@
 /**
- * Publisher-platform breakdown sync (Phase B — ACCOUNT level, kill-switched).
+ * Account-level breakdown sync (Phase B — ACCOUNT level, kill-switched).
  *
- * Fetches Meta `publisher_platform` breakdown insights at ACCOUNT level for a
- * single connection over an N-day window and stores them in
- * `InsightsBreakdownDaily`. This is a completely separate write path from the
- * entity-level insights pipeline in `lib/meta/sync.ts`: it never touches
- * `InsightsDaily`, `persistInsight`, or any `SyncJob` row.
+ * Fetches Meta breakdown insights at ACCOUNT level for a single connection over
+ * an N-day window and stores them in `InsightsBreakdownDaily`. Two dimensions
+ * are wired up, both driven by the same core:
+ *   - PUBLISHER_PLATFORM — Meta `publisher_platform`. Daily cadence
+ *     (`sync-all?mode=full`) + manual route.
+ *   - PLACEMENT — Meta `publisher_platform,platform_position`, stored as a
+ *     pipe-delimited composite value. Manual route only in this phase.
+ *
+ * This is a completely separate write path from the entity-level insights
+ * pipeline in `lib/meta/sync.ts`: it never touches `InsightsDaily`,
+ * `persistInsight`, or any `SyncJob` row.
  *
  * Manual trigger only, disabled by default behind `BREAKDOWN_SYNC_ENABLED`.
  *
@@ -16,7 +22,7 @@ import { format, subDays } from "date-fns";
 import { BreakdownDimension, InsightEntity } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getMetaClient } from "@/lib/meta/sync";
-import type { MetaBreakdownInsight } from "@/lib/meta/client";
+import type { MetaBreakdown, MetaBreakdownInsight } from "@/lib/meta/client";
 
 export type BreakdownSyncOutcome = "disabled" | "synced" | "failed";
 
@@ -115,8 +121,78 @@ function numberOrZero(value: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Describes one breakdown job: which stored dimension it fills, which Meta
+ * `breakdowns` string to request, and how to derive the stored `value` from a
+ * returned row.
+ */
+interface BreakdownConfig {
+  dimension: BreakdownDimension;
+  metaBreakdown: MetaBreakdown;
+  buildValue: (row: MetaBreakdownInsight) => string;
+}
+
+const PUBLISHER_PLATFORM_CONFIG: BreakdownConfig = {
+  dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+  metaBreakdown: "publisher_platform",
+  buildValue: (row) => row.publisher_platform ?? "unknown",
+};
+
+/**
+ * COMPOSITE-VALUE CONTRACT for PLACEMENT.
+ *
+ * Meta rejects `platform_position` as a standalone breakdown but accepts the
+ * combination `publisher_platform,platform_position`, which is what produces
+ * the Instagram-Reels vs Instagram-Feed vs Facebook-Feed view a buyer needs.
+ *
+ * `InsightsBreakdownDaily` stores ONE dimension + ONE value per row, keyed by
+ * `(entityType, entityId, date, dimension, value)`. Rather than adding
+ * dimension2/value2 (which would force a unique-index rebuild and hit the
+ * PostgreSQL rule that NULLs are distinct in unique indexes, silently removing
+ * uniqueness protection from existing rows), the combination is stored as a
+ * pipe-delimited COMPOSITE value under the PLACEMENT dimension:
+ *
+ *   "{publisher_platform}|{platform_position}"  e.g. "instagram|instagram_reels"
+ *
+ * `publisher_platform` always comes first. The pipe is a safe delimiter: Meta's
+ * values for these two dimensions contain no pipe characters.
+ *
+ * PLACEMENT and PUBLISHER_PLATFORM are SEPARATE dimensions producing SEPARATE
+ * rows. Consumers must filter by `dimension` and must never sum across them.
+ */
+const PLACEMENT_CONFIG: BreakdownConfig = {
+  dimension: BreakdownDimension.PLACEMENT,
+  metaBreakdown: "publisher_platform,platform_position",
+  buildValue: (row) =>
+    `${row.publisher_platform ?? "unknown"}|${row.platform_position ?? "unknown"}`,
+};
+
+/**
+ * Publisher-platform breakdown sync. Public contract is unchanged: same name,
+ * same signature, same return type, same behaviour. Called by the daily
+ * `sync-all?mode=full` cadence and by the manual route.
+ */
 export async function syncPublisherPlatformBreakdown(
   connectionId: string,
+  days = 30,
+): Promise<BreakdownSyncResult> {
+  return syncBreakdownDimension(connectionId, PUBLISHER_PLATFORM_CONFIG, days);
+}
+
+/**
+ * Placement (publisher_platform x platform_position) breakdown sync. Manual
+ * route only in this phase — deliberately NOT wired into the daily cadence.
+ */
+export async function syncPlacementBreakdown(
+  connectionId: string,
+  days = 30,
+): Promise<BreakdownSyncResult> {
+  return syncBreakdownDimension(connectionId, PLACEMENT_CONFIG, days);
+}
+
+async function syncBreakdownDimension(
+  connectionId: string,
+  config: BreakdownConfig,
   days = 30,
 ): Promise<BreakdownSyncResult> {
   const untilDate = format(new Date(), "yyyy-MM-dd");
@@ -164,7 +240,7 @@ export async function syncPublisherPlatformBreakdown(
   try {
     rows = await ctx.meta.getAccountInsightsWithBreakdown(
       ctx.platformAccountId,
-      "publisher_platform",
+      config.metaBreakdown,
       sinceDate,
       untilDate,
     );
@@ -181,7 +257,7 @@ export async function syncPublisherPlatformBreakdown(
   try {
     for (const row of rows) {
       const date = new Date(row.date_start);
-      const value = row.publisher_platform ?? "unknown";
+      const value = config.buildValue(row);
 
       const purchaseAction = row.actions?.find(
         (a) => a.action_type === "purchase",
@@ -209,7 +285,7 @@ export async function syncPublisherPlatformBreakdown(
             entityType: InsightEntity.ACCOUNT,
             entityId: connection.id,
             date,
-            dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+            dimension: config.dimension,
             value,
           },
         },
@@ -217,7 +293,7 @@ export async function syncPublisherPlatformBreakdown(
           entityType: InsightEntity.ACCOUNT,
           entityId: connection.id,
           date,
-          dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+          dimension: config.dimension,
           value,
           ...data,
         },
@@ -264,7 +340,7 @@ export async function syncPublisherPlatformBreakdown(
       where: {
         entityType: InsightEntity.ACCOUNT,
         entityId: connection.id,
-        dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+        dimension: config.dimension,
         date: { gte: windowStartDate, lte: windowEndDate },
       },
       _sum: { spend: true },

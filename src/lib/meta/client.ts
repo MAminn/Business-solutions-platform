@@ -203,17 +203,25 @@ export interface MetaInsight {
 
 /**
  * Dimensional breakdowns supported by `getAccountInsightsWithBreakdown`.
- * Deliberately narrow — only `publisher_platform` is wired up today.
+ * Deliberately narrow — only the combinations we actually store are listed.
+ *
+ * `publisher_platform,platform_position` is a COMBINED breakdown: Meta rejects
+ * `platform_position` on its own ("Current combination of data breakdown
+ * columns (action_type, platform_position) is invalid") but accepts the pair,
+ * and returns a row per (publisher_platform, platform_position) combination.
  */
-export type MetaBreakdown = "publisher_platform";
+export type MetaBreakdown =
+  | "publisher_platform"
+  | "publisher_platform,platform_position";
 
 /**
  * An insights row returned with a `breakdowns` parameter. Carries the
  * breakdown key alongside the metrics so callers can map a row to its
- * dimension value.
+ * dimension value. Combined breakdowns set one key per requested dimension.
  */
 export interface MetaBreakdownInsight extends MetaInsight {
   publisher_platform?: string;
+  platform_position?: string;
 }
 
 // Shared insights field list, used for both per-entity and account-level pulls

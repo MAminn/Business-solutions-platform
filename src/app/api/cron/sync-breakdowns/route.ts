@@ -2,18 +2,23 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { BreakdownDimension, InsightEntity } from "@prisma/client";
 import { db } from "@/lib/db";
-import { syncPublisherPlatformBreakdown } from "@/lib/meta/sync-breakdowns";
+import {
+  syncPlacementBreakdown,
+  syncPublisherPlatformBreakdown,
+} from "@/lib/meta/sync-breakdowns";
 
 /**
- * Manual publisher_platform breakdown sync (Phase B — single-account pilot).
+ * Manual breakdown sync (Phase B — single-account pilot).
  *
- * Fetches ACCOUNT-level `publisher_platform` breakdown insights for ONE
- * connection over a 30-day window and writes them to `InsightsBreakdownDaily`.
- * The entity-level insights pipeline (`InsightsDaily` / `persistInsight`) is
- * never touched.
+ * Fetches ACCOUNT-level breakdown insights for ONE connection over a 30-day
+ * window and writes them to `InsightsBreakdownDaily`. The entity-level insights
+ * pipeline (`InsightsDaily` / `persistInsight`) is never touched.
  *
  * Modes:
  *   - ?connectionId=<id> → REQUIRED. This phase never iterates all connections.
+ *   - ?dimension=<name>  → optional; `publisher_platform` (default) or
+ *                          `placement` (Meta `publisher_platform,platform_position`,
+ *                          stored as a pipe-delimited composite value).
  *   - ?dryRun=true       → report the plan; zero Meta calls, zero writes.
  *
  * Kill switch: disabled unless `BREAKDOWN_SYNC_ENABLED === "true"`. When
@@ -29,6 +34,22 @@ import { syncPublisherPlatformBreakdown } from "@/lib/meta/sync-breakdowns";
  */
 
 export const dynamic = "force-dynamic";
+
+/** Query-param name → stored dimension + sync function. */
+const DIMENSIONS = {
+  publisher_platform: {
+    dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+    run: syncPublisherPlatformBreakdown,
+  },
+  placement: {
+    dimension: BreakdownDimension.PLACEMENT,
+    run: syncPlacementBreakdown,
+  },
+} as const;
+
+type DimensionParam = keyof typeof DIMENSIONS;
+
+const DEFAULT_DIMENSION: DimensionParam = "publisher_platform";
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -59,6 +80,21 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const dimensionParam =
+    req.nextUrl.searchParams.get("dimension") ?? DEFAULT_DIMENSION;
+  if (!(dimensionParam in DIMENSIONS)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Unknown dimension "${dimensionParam}". Valid values: ${Object.keys(
+          DIMENSIONS,
+        ).join(", ")}.`,
+      },
+      { status: 400 },
+    );
+  }
+  const selected = DIMENSIONS[dimensionParam as DimensionParam];
+
   const dryRun = req.nextUrl.searchParams.get("dryRun") === "true";
   const enabled = process.env.BREAKDOWN_SYNC_ENABLED === "true";
 
@@ -79,7 +115,7 @@ export async function GET(req: NextRequest) {
       where: {
         entityType: InsightEntity.ACCOUNT,
         entityId: conn.id,
-        dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+        dimension: selected.dimension,
       },
     });
 
@@ -90,7 +126,7 @@ export async function GET(req: NextRequest) {
         connectionId: conn.id,
         accountName: conn.accountName,
         status: conn.status,
-        dimension: BreakdownDimension.PUBLISHER_PLATFORM,
+        dimension: selected.dimension,
         entityLevel: InsightEntity.ACCOUNT,
         windowDays: 30,
         breakdownSyncEnabled: enabled,
@@ -109,9 +145,9 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const result = await syncPublisherPlatformBreakdown(connectionId);
+  const result = await selected.run(connectionId);
   console.log(
-    `[sync-breakdowns] account=${result.accountName} fetched=${result.fetched} written=${result.written}`,
+    `[sync-breakdowns] account=${result.accountName} dimension=${selected.dimension} fetched=${result.fetched} written=${result.written}`,
   );
 
   return NextResponse.json({ ok: result.outcome !== "failed", result });
