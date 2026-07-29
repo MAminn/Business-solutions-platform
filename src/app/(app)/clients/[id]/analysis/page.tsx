@@ -192,6 +192,14 @@ export default async function ClientAnalysisPage({
     .map((r) => ({ name: r.platform, value: r.spend, isOthers: false }))
     .reverse();
 
+  // Placement split is ACCOUNT level by construction and already bucketed to
+  // top 8 + Others server-side. Reversed for the same recharts reason.
+  const placement = analysis.placementBreakdown;
+  const placementChartData: BreakdownDatum[] = (placement?.rows ?? [])
+    .filter((r) => r.spend > 0)
+    .map((r) => ({ name: r.label, value: r.spend, isOthers: r.isOthers }))
+    .reverse();
+
   const levelLabel = LEVEL_LABEL[level];
   const prevLabel = `vs prev ${range.days}d`;
 
@@ -326,6 +334,88 @@ export default async function ClientAnalysisPage({
                         <TableCell className='font-medium'>
                           {r.platform}
                         </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatCurrency(r.spend, currency)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatPercentRaw(r.spendShare * 100, 0)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {formatInt(r.purchases)}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {r.spend > 0 ? formatMultiplier(r.roas) : "—"}
+                        </TableCell>
+                        <TableCell className='text-right tabular-nums'>
+                          {r.purchases > 0
+                            ? formatCurrency(r.cpa, currency)
+                            : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Placement split — Meta publisher_platform x platform_position */}
+      {placement && (
+        <Card className='p-6'>
+          <div className='flex flex-wrap items-center gap-3'>
+            <h3 className='text-base font-semibold'>Placement</h3>
+            <Badge variant='muted'>Meta-reported · account level</Badge>
+          </div>
+          <p className='mt-1 text-xs text-muted-foreground'>
+            Account-level split across Meta placements. This panel is{" "}
+            <span className='font-medium'>not</span> affected by the
+            Account/Campaign/Ad level switch — that switch controls the entity
+            breakdown below, not this split. It is a split for comparison, not a
+            restatement of account totals: Meta cannot always attribute every
+            impression to a placement, so placement spend may sum slightly below
+            account spend. Shown in {currency}.
+          </p>
+          {!placement.coverageComplete && (
+            <p className='mt-1 text-xs text-muted-foreground'>
+              Placement data covers {placement.daysPresent} of{" "}
+              {placement.daysInRange} days in this range.
+            </p>
+          )}
+
+          {placement.rows.length === 0 ? (
+            <div className='mt-4'>
+              <EmptyState
+                title='No placement breakdown data'
+                description='No placement breakdown data for this range. Placement splits are synced separately and cover a trailing 30-day window.'
+              />
+            </div>
+          ) : (
+            <div className='mt-4 grid gap-6 lg:grid-cols-2'>
+              <BreakdownBarChart
+                title='Placement by Spend'
+                subtitle='Top 8 + Others, account level'
+                data={placementChartData}
+                metric='spend'
+                currency={currency}
+              />
+              <div className='rounded-xl border border-border/60'>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Placement</TableHead>
+                      <TableHead className='text-right'>Spend</TableHead>
+                      <TableHead className='text-right'>Share</TableHead>
+                      <TableHead className='text-right'>Purchases</TableHead>
+                      <TableHead className='text-right'>Meta ROAS</TableHead>
+                      <TableHead className='text-right'>Meta CPA</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {placement.rows.map((r) => (
+                      <TableRow key={r.value}>
+                        <TableCell className='font-medium'>{r.label}</TableCell>
                         <TableCell className='text-right tabular-nums'>
                           {formatCurrency(r.spend, currency)}
                         </TableCell>

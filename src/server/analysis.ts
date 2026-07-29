@@ -96,6 +96,44 @@ export interface PlatformBreakdown {
   coverageComplete: boolean;
 }
 
+/**
+ * One Meta placement — the `publisher_platform,platform_position` combination,
+ * stored under the PLACEMENT dimension as a pipe-delimited composite value
+ * (e.g. "instagram|instagram_reels"). ACCOUNT level only, so this split is
+ * independent of the Account/Campaign/Ad level switch.
+ */
+export interface PlacementBreakdownRow {
+  /** Raw composite value as stored, e.g. "instagram|instagram_reels". */
+  value: string;
+  /** Publisher platform part, e.g. "instagram". */
+  platform: string;
+  /** Platform position part, e.g. "instagram_reels". */
+  position: string;
+  /** Humanized display label, e.g. "Instagram · Reels". */
+  label: string;
+  spend: number;
+  purchases: number;
+  conversionValue: number;
+  roas: number; // conversionValue / spend, 0 when spend is 0
+  cpa: number; // spend / purchases, 0 when purchases is 0
+  spendShare: number; // share of placement-total spend, 0–1
+  /** True for the aggregated "Others" row. */
+  isOthers: boolean;
+}
+
+export interface PlacementBreakdown {
+  /** Top 8 by spend desc, plus an "Others" row when applicable. */
+  rows: PlacementBreakdownRow[];
+  totalSpend: number;
+  totalPurchases: number;
+  /** Distinct in-range dates that have placement rows. */
+  daysPresent: number;
+  /** Days in the selected Analysis range. */
+  daysInRange: number;
+  /** True when daysPresent === daysInRange. */
+  coverageComplete: boolean;
+}
+
 export interface AnalysisResult {
   hasData: boolean;
   currency: string;
@@ -129,6 +167,13 @@ export interface AnalysisResult {
    * `rows` array when nothing is stored for the selected range.
    */
   platformBreakdown: PlatformBreakdown | null;
+  /**
+   * Meta placement split (publisher_platform x platform_position), ACCOUNT
+   * level. Null only when the client has no connections / no data at all;
+   * otherwise populated, with an empty `rows` array when nothing is stored for
+   * the selected range.
+   */
+  placementBreakdown: PlacementBreakdown | null;
 }
 
 function num(value: unknown): number {
@@ -220,6 +265,7 @@ export async function getClientAnalysis(
     breakdownTotals: { spend: 0, purchases: 0 },
     fatigue: { ctrTrendPct: null, frequencyTrendPct: null, note: null },
     platformBreakdown: null,
+    placementBreakdown: null,
   };
 
   if (connectionIds.length === 0) return emptyResult;
@@ -506,6 +552,98 @@ export async function getClientAnalysis(
     coverageComplete: platformDates.length === days,
   };
 
+  // ---------------------------------------------------------------------------
+  // Placement split (Meta publisher_platform x platform_position), current
+  // range only. Same construction and constraints as the platform split above:
+  // ACCOUNT level by definition, read-only aggregation of already-stored rows,
+  // ratios derived in code. Values are stored as the pipe-delimited composite
+  // "{publisher_platform}|{platform_position}" and split back apart here.
+  // ---------------------------------------------------------------------------
+  const placementWhere = {
+    entityType: InsightEntity.ACCOUNT,
+    entityId: { in: connectionIds },
+    dimension: BreakdownDimension.PLACEMENT,
+    date: { gte: start, lte: end },
+  };
+
+  const [placementGrouped, placementDates] = await Promise.all([
+    db.insightsBreakdownDaily.groupBy({
+      by: ["value"],
+      where: placementWhere,
+      _sum: { spend: true, purchases: true, conversionValue: true },
+    }),
+    db.insightsBreakdownDaily.groupBy({
+      by: ["date"],
+      where: placementWhere,
+      _count: { _all: true },
+    }),
+  ]);
+
+  // Share is measured against ALL placements, including those folded into
+  // "Others", so the displayed shares sum to ~100%.
+  const placementTotalSpend = placementGrouped.reduce(
+    (s, g) => s + num(g._sum.spend),
+    0,
+  );
+
+  const placementSorted = placementGrouped
+    .map((g) => {
+      const { platform, position } = splitPlacementValue(g.value);
+      return {
+        value: g.value,
+        platform,
+        position,
+        label: placementLabel(platform, position),
+        spend: num(g._sum.spend),
+        purchases: num(g._sum.purchases),
+        conversionValue: num(g._sum.conversionValue),
+      };
+    })
+    .sort((a, b) => b.spend - a.spend);
+
+  const PLACEMENT_TOP_N = 8;
+  const placementTop = placementSorted.slice(0, PLACEMENT_TOP_N);
+  const placementRest = placementSorted.slice(PLACEMENT_TOP_N);
+
+  const placementRows: PlacementBreakdownRow[] = placementTop.map((r) => ({
+    ...r,
+    roas: r.spend > 0 ? r.conversionValue / r.spend : 0,
+    cpa: r.purchases > 0 ? r.spend / r.purchases : 0,
+    spendShare: placementTotalSpend > 0 ? r.spend / placementTotalSpend : 0,
+    isOthers: false,
+  }));
+
+  if (placementRest.length > 0) {
+    const spend = placementRest.reduce((s, r) => s + r.spend, 0);
+    const purchases = placementRest.reduce((s, r) => s + r.purchases, 0);
+    const conversionValue = placementRest.reduce(
+      (s, r) => s + r.conversionValue,
+      0,
+    );
+    placementRows.push({
+      value: "others",
+      platform: "",
+      position: "",
+      label: "Others",
+      spend,
+      purchases,
+      conversionValue,
+      roas: spend > 0 ? conversionValue / spend : 0,
+      cpa: purchases > 0 ? spend / purchases : 0,
+      spendShare: placementTotalSpend > 0 ? spend / placementTotalSpend : 0,
+      isOthers: true,
+    });
+  }
+
+  const placementBreakdown: PlacementBreakdown = {
+    rows: placementRows,
+    totalSpend: placementTotalSpend,
+    totalPurchases: placementSorted.reduce((s, r) => s + r.purchases, 0),
+    daysPresent: placementDates.length,
+    daysInRange: days,
+    coverageComplete: placementDates.length === days,
+  };
+
   return {
     hasData: timeSeries.some((p) => p.spend > 0) || breakdown.length > 0,
     currency,
@@ -522,7 +660,58 @@ export async function getClientAnalysis(
     breakdownTotals,
     fatigue,
     platformBreakdown,
+    placementBreakdown,
   };
+}
+
+/**
+ * Splits the stored PLACEMENT composite value on the FIRST pipe.
+ * Defensive: a value with no pipe is treated as platform-only.
+ */
+function splitPlacementValue(value: string): {
+  platform: string;
+  position: string;
+} {
+  const i = value.indexOf("|");
+  if (i === -1) return { platform: value, position: "" };
+  return { platform: value.slice(0, i), position: value.slice(i + 1) };
+}
+
+/** Meta publisher_platform values whose display casing is not plain title case. */
+const PLATFORM_LABELS: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  messenger: "Messenger",
+  whatsapp: "WhatsApp",
+  threads: "Threads",
+  audience_network: "Audience Network",
+};
+
+function titleCaseWords(raw: string): string {
+  return raw
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Humanizes a placement into "{Platform} · {Position}", e.g.
+ * "instagram" + "instagram_reels" → "Instagram · Reels". A leading platform
+ * prefix on the position is redundant and is stripped.
+ */
+function placementLabel(platform: string, position: string): string {
+  const platformLabel = PLATFORM_LABELS[platform] ?? titleCaseWords(platform);
+  if (!position) return platformLabel;
+
+  const prefix = `${platform}_`;
+  const trimmed = position.startsWith(prefix)
+    ? position.slice(prefix.length)
+    : position;
+
+  const positionLabel = titleCaseWords(trimmed);
+  if (!positionLabel) return platformLabel;
+  return `${platformLabel} · ${positionLabel}`;
 }
 
 function computeFatigue(
