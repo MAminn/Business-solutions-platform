@@ -42,6 +42,7 @@ model User {
   generatedReports Report[] @relation("ReportGeneratedBy")
   reportComments ReportComment[]
   auditLogs     AuditLog[]
+  billingPaymentsRecorded BillingPayment[] @relation("BillingPaymentRecordedBy")
 
   @@index([clerkId])
   @@index([email])
@@ -106,6 +107,16 @@ model Client {
   maxCpa              Decimal?     @db.Decimal(10, 2)
   minRoas             Decimal?     @db.Decimal(6, 2)
   reportingCurrency   String       @default("USD")
+  // Loopa's own service fee and billing contact. Deliberately separate from
+  // monthlyBudget, which is the client's ADVERTISING budget and is consumed by
+  // overview pacing (src/app/(app)/clients/[id]/page.tsx). billingEnabled is an
+  // explicit opt-in so no existing client is silently in billing scope.
+  serviceFeeAmount      Decimal?  @db.Decimal(12, 2)
+  serviceFeeCurrency    String?
+  billingContactName    String?
+  billingContactEmail   String?
+  billingCycleStartDate DateTime? @db.Date
+  billingEnabled        Boolean   @default(false)
   // Portal-facing user (single-user client login). For multi-user clients,
   // add a separate ClientPortalMember model later.
   portalUserId        String?
@@ -122,6 +133,7 @@ model Client {
   recommendations     Recommendation[]
   reports             Report[]
   strategies          Strategy[]
+  billingCycles       BillingCycle[]
 
   @@index([organizationId, status])
   @@index([health])
@@ -325,6 +337,207 @@ model FundAlertSent {
   fundingCycle FundingCycle @relation(fields: [fundingCycleId], references: [id], onDelete: Cascade)
 
   @@unique([fundingCycleId, threshold])
+}
+
+// ============================================================================
+// CLIENT BILLING (Loopa service fee — FIXED model, EGP, 50/50)
+//
+// Loopa's own client billing: a fixed monthly service fee, invoiced in EGP,
+// paid in exactly two 50% installments. Entirely separate from the FUNDING
+// CYCLES section above — that tracks money the client puts INTO Meta for ad
+// spend and is keyed to an AdAccountConnection. Billing is keyed to the Client
+// and never touches any Meta model.
+//
+// Invariants (load-bearing — read before changing anything here):
+//
+// (a) SNAPSHOTS. BillingCycle.feeAmount / .currency are snapshots taken at
+//     cycle creation. Raising Client.serviceFeeAmount later must NEVER
+//     restate an already-issued invoice.
+//
+// (b) DERIVED BALANCES. "Amount received" and "outstanding balance" are
+//     derived from BillingPayment rows at query time and are NEVER stored.
+//     Same rule as the InsightsBreakdownDaily comment below: no second source
+//     of truth for a computed figure.
+//
+// (c) DATES. Every @db.Date field is an Africa/Cairo CIVIL DATE stored at UTC
+//     midnight (the convention already used for InsightsDaily.date — see
+//     src/lib/month.ts). paidAt / sentAt are instants (UTC) recording when an
+//     action happened. Calendar-day arithmetic (due = D+15, reminder = D+14)
+//     is done on the civil date, never by adding milliseconds to an instant —
+//     Egypt observes DST, so a fixed offset breaks twice a year.
+//
+// (d) MONEY. Storage is Decimal(12, 2), but ALL arithmetic happens in integer
+//     piasters (1 EGP = 100 piasters). Fractional piasters are never stored.
+//     The 50/50 split gives any odd piaster to installment 1:
+//     EGP 10,000.01 -> 5,000.01 + 5,000.00, summing back exactly.
+//
+// Automatic creation of the FOLLOWING month's BillingCycle is deferred and is
+// NOT implemented in commits B-1 through B-8. In that scope a cycle is created
+// only by the user's "Record first installment" action. The
+// @@unique([clientId, periodStart]) key exists so that the future monthly
+// bootstrap is a pure code addition needing no further migration.
+// ============================================================================
+
+enum BillingCycleStatus {
+  OPEN
+  PAID
+  CANCELLED
+}
+
+enum InstallmentStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum BillingPaymentMethod {
+  BANK_TRANSFER
+  INSTAPAY
+  CASH
+  CHEQUE
+  OTHER
+}
+
+enum BillingEmailKind {
+  PAYMENT_RECEIPT
+  SECOND_INSTALLMENT_REMINDER_CLIENT
+  SECOND_INSTALLMENT_REMINDER_INTERNAL
+}
+
+enum BillingEmailStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+// One month of service fee for one client. feeAmount/currency are snapshots
+// (invariant a). periodStart/periodEnd are Cairo civil dates (invariant c).
+model BillingCycle {
+  id          String             @id @default(cuid())
+  clientId    String
+  periodStart DateTime           @db.Date
+  periodEnd   DateTime           @db.Date
+  feeAmount   Decimal            @db.Decimal(12, 2)
+  currency    String
+  status      BillingCycleStatus @default(OPEN)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  client       Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  installments BillingInstallment[]
+
+  // Idempotent cycle creation: a duplicate bootstrap for the same period is a
+  // P2002, never a second cycle.
+  @@unique([clientId, periodStart])
+  @@index([clientId, periodStart])
+}
+
+// Exactly two per cycle in v1: sequence 1 and 2, 50% each. sharePercent is
+// recorded for auditability but is not user-editable (percentage billing and
+// custom installment percentages are explicitly out of scope).
+//
+// Installment 2's dueDate/reminderDate stay null until installment 1 is paid;
+// they are then set to D+15 / D+14 from the recorded payment date (invariant c).
+model BillingInstallment {
+  id             String            @id @default(cuid())
+  billingCycleId String
+  sequence       Int
+  sharePercent   Int
+  amountDue      Decimal           @db.Decimal(12, 2)
+  currency       String
+  status         InstallmentStatus @default(PENDING)
+  dueDate        DateTime?         @db.Date
+  reminderDate   DateTime?         @db.Date
+  paidAt         DateTime?
+  invoiceNumber  String?           @unique
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  billingCycle BillingCycle           @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  payment      BillingPayment?
+  deliveries   BillingEmailDelivery[]
+
+  // Concurrency guard for second-installment creation.
+  @@unique([billingCycleId, sequence])
+  // Scan index for the daily reminder job (status + reminderDate <= today).
+  @@index([status, reminderDate])
+}
+
+// Financial truth. Append-only: never updated, never deleted.
+//
+// billingInstallmentId is @unique — one payment per installment in v1. That is
+// the double-click / concurrent-submit guard: the loser gets a P2002 and is
+// reported as an idempotent success. It also forecloses partial payments,
+// which is correct for a fixed 50/50 schedule and must be revisited only if
+// partial payments enter scope.
+//
+// clientId is deliberately a denormalized scalar with NO relation, matching
+// AiRun.clientId, so client-level payment history is one indexed read.
+//
+// recordedById is a nullable FK to User with onDelete: SetNull — deleting a
+// user nulls the attribution but must NEVER cascade into, or otherwise
+// rewrite, the financial record itself.
+model BillingPayment {
+  id                   String               @id @default(cuid())
+  billingInstallmentId String               @unique
+  clientId             String
+  amountReceived       Decimal              @db.Decimal(12, 2)
+  currency             String
+  paymentDate          DateTime             @db.Date
+  method               BillingPaymentMethod
+  reference            String?
+  internalNote         String?
+  receiptNumber        String               @unique
+  recordedById         String?
+  createdAt            DateTime             @default(now())
+
+  installment BillingInstallment @relation(fields: [billingInstallmentId], references: [id], onDelete: Restrict)
+  recordedBy  User?              @relation("BillingPaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([clientId, paymentDate])
+}
+
+// Delivery ledger for all three billing emails (receipt, client reminder,
+// internal reminder), discriminated by `kind`.
+//
+// Deliberately richer than FundAlertSent, which records success only and has no
+// retry state. Here @@unique([billingInstallmentId, kind]) is the dedupe key and
+// `status` makes the claim a compare-and-swap: a row is claimed by moving it to
+// SENDING before the send, so a concurrent cron run cannot double-send. A row
+// left in SENDING for over 30 minutes (crash mid-send) is automatically
+// reclaimed and retried for ALL kinds — including PAYMENT_RECEIPT — up to 5
+// attempts; after that it stays FAILED for a manual retry. SENT is never
+// reclaimed. Accepted trade-off: at-least-once delivery, with a duplicate
+// possible only if a crash lands in the sub-second window between SMTP
+// accepting the message and the SENT write committing.
+model BillingEmailDelivery {
+  id                   String             @id @default(cuid())
+  billingInstallmentId String
+  kind                 BillingEmailKind
+  status               BillingEmailStatus @default(PENDING)
+  recipient            String
+  subject              String
+  attempts             Int                @default(0)
+  lastError            String?
+  messageId            String?
+  sentAt               DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  installment BillingInstallment @relation(fields: [billingInstallmentId], references: [id], onDelete: Cascade)
+
+  @@unique([billingInstallmentId, kind])
+  @@index([status])
+}
+
+// Gapless invoice / receipt numbering, e.g. scope "INV-2026", "RCT-2026".
+// Allocated inside the payment transaction with an atomic increment, so a
+// rolled-back payment burns no number.
+model BillingDocumentCounter {
+  scope     String   @id
+  nextValue Int      @default(1)
+  updatedAt DateTime @updatedAt
 }
 
 // ============================================================================
