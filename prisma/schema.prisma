@@ -399,6 +399,16 @@ enum BillingPaymentMethod {
 }
 
 enum BillingEmailKind {
+  // The invoice for an installment. Deliberately generic: the same kind covers
+  // installment 1 and installment 2, because BillingEmailDelivery is already
+  // keyed @@unique([billingInstallmentId, kind]) — so one delivery row per
+  // installment per kind, with no first/second variants needed.
+  //
+  // "Invoice sent" is NOT an installment status. BillingInstallment.status
+  // stays purely financial (PENDING / PAID / CANCELLED); the awaiting-payment
+  // UI state is derived from the existence of the installment plus this
+  // delivery row's state plus that financial status.
+  INSTALLMENT_INVOICE
   PAYMENT_RECEIPT
   SECOND_INSTALLMENT_REMINDER_CLIENT
   SECOND_INSTALLMENT_REMINDER_INTERNAL
