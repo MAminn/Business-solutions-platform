@@ -9,6 +9,8 @@ export const CLIENT_SUB_TABS = [
   { label: "Creatives", segment: "creatives" },
   { label: "Tasks", segment: "tasks" },
   { label: "Ad Account", segment: "ad-account" },
+  // Appended last on purpose — no existing tab position shifts.
+  { label: "Billing", segment: "billing" },
 ] as const;
 
 export type ClientSubTabSegment = (typeof CLIENT_SUB_TABS)[number]["segment"];
