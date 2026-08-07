@@ -28,6 +28,19 @@ export interface EditClientDialogClient {
   // Carried through unchanged — not user-editable in this commit.
   status: ClientStatus;
   health: ClientHealth;
+  // Loopa commercial / billing profile. OPTIONAL on purpose: a caller that
+  // does not load these (and therefore cannot render them) omits them, the
+  // billing section is hidden, and no billing key is submitted — so saving the
+  // sheet leaves a configured billing profile completely untouched rather than
+  // silently wiping it. A caller that DOES pass `billingEnabled` opts into
+  // managing the profile.
+  billingEnabled?: boolean;
+  serviceFeeAmount?: string | null;
+  serviceFeeCurrency?: string | null;
+  billingContactName?: string | null;
+  billingContactEmail?: string | null;
+  /** YYYY-MM-DD civil date (Africa/Cairo), never a raw instant. */
+  billingCycleStartDate?: string | null;
 }
 
 interface EditClientDialogProps {
@@ -43,13 +56,16 @@ function toInput(value: number | null): string {
 interface FieldProps {
   id: string;
   label: string;
-  type?: "text" | "number" | "url";
+  type?: "text" | "number" | "url" | "email" | "date";
   step?: string;
   required?: boolean;
   placeholder?: string;
   value: string;
   onChange: (value: string) => void;
   errors?: string[];
+  disabled?: boolean;
+  hint?: string;
+  inputMode?: "decimal";
 }
 
 function Field({
@@ -62,8 +78,12 @@ function Field({
   value,
   onChange,
   errors,
+  disabled,
+  hint,
+  inputMode,
 }: FieldProps) {
   const errorId = errors && errors.length > 0 ? `${id}-error` : undefined;
+  const hintId = hint ? `${id}-hint` : undefined;
   return (
     <div className='space-y-1.5'>
       <Label htmlFor={id}>
@@ -77,10 +97,17 @@ function Field({
         placeholder={placeholder}
         required={required}
         value={value}
+        disabled={disabled}
+        inputMode={inputMode}
         onChange={(e) => onChange(e.target.value)}
         aria-invalid={errorId ? true : undefined}
-        aria-describedby={errorId}
+        aria-describedby={errorId ?? hintId}
       />
+      {hint && !errorId && (
+        <p id={hintId} className='text-xs text-muted-foreground'>
+          {hint}
+        </p>
+      )}
       {errors && errors.length > 0 && (
         <p id={errorId} className='text-xs text-destructive'>
           {errors[0]}
@@ -107,6 +134,26 @@ export function EditClientDialog({
   const [notes, setNotes] = React.useState(client.notes ?? "");
   const [status, setStatus] = React.useState<ClientStatus>(client.status);
 
+  // Billing is only editable here when the caller actually supplied the
+  // profile; otherwise the section is hidden and nothing billing-related is
+  // submitted. See EditClientDialogClient.
+  const managesBilling = client.billingEnabled !== undefined;
+  const [billingEnabled, setBillingEnabled] = React.useState(
+    client.billingEnabled ?? false,
+  );
+  const [serviceFeeAmount, setServiceFeeAmount] = React.useState(
+    client.serviceFeeAmount ?? "",
+  );
+  const [billingContactName, setBillingContactName] = React.useState(
+    client.billingContactName ?? "",
+  );
+  const [billingContactEmail, setBillingContactEmail] = React.useState(
+    client.billingContactEmail ?? "",
+  );
+  const [billingCycleStartDate, setBillingCycleStartDate] = React.useState(
+    client.billingCycleStartDate ?? "",
+  );
+
   const [errors, setErrors] = React.useState<ClientFormState["errors"]>({});
   const [isPending, startTransition] = React.useTransition();
 
@@ -122,6 +169,11 @@ export function EditClientDialog({
     setMaxCpa(toInput(client.maxCpa));
     setNotes(client.notes ?? "");
     setStatus(client.status);
+    setBillingEnabled(client.billingEnabled ?? false);
+    setServiceFeeAmount(client.serviceFeeAmount ?? "");
+    setBillingContactName(client.billingContactName ?? "");
+    setBillingContactEmail(client.billingContactEmail ?? "");
+    setBillingCycleStartDate(client.billingCycleStartDate ?? "");
     setErrors({});
   }, [open, client]);
 
@@ -144,6 +196,19 @@ export function EditClientDialog({
         status,
         // Passed straight through, unchanged — health stays derived.
         health: client.health,
+        // Billing keys are sent ONLY when this dialog manages billing.
+        // Omitting `billingEnabled` tells the server action to leave every
+        // billing column untouched.
+        ...(managesBilling
+          ? {
+              billingEnabled,
+              serviceFeeAmount,
+              serviceFeeCurrency: billingEnabled ? "EGP" : "",
+              billingContactName,
+              billingContactEmail,
+              billingCycleStartDate,
+            }
+          : {}),
       });
 
       if ("ok" in result) {
@@ -266,6 +331,123 @@ export function EditClientDialog({
                 )}
               />
             </div>
+
+            {managesBilling && (
+              <div className='space-y-4 border-t border-border/60 pt-5'>
+                <div>
+                  <h3 className='text-sm font-semibold tracking-tight'>
+                    Commercial &amp; Billing
+                  </h3>
+                  <p className='mt-1 text-xs text-muted-foreground'>
+                    Loopa&rsquo;s service fee — separate from the client&rsquo;s
+                    advertising budget.
+                  </p>
+                </div>
+
+                <div className='flex items-start gap-3 rounded-md border border-border/60 bg-muted/30 p-3'>
+                  <input
+                    id='edit-client-billing-enabled'
+                    type='checkbox'
+                    checked={billingEnabled}
+                    onChange={(e) => setBillingEnabled(e.target.checked)}
+                    className='mt-0.5 h-4 w-4 rounded border-input accent-foreground'
+                  />
+                  <div className='space-y-1'>
+                    <Label htmlFor='edit-client-billing-enabled'>
+                      Enable billing
+                    </Label>
+                    <p className='text-xs text-muted-foreground'>
+                      Turning this off clears the billing configuration.
+                    </p>
+                  </div>
+                </div>
+
+                <div className='grid grid-cols-1 gap-5 md:grid-cols-2'>
+                  <Field
+                    id='edit-client-service-fee'
+                    label='Monthly service fee'
+                    type='text'
+                    inputMode='decimal'
+                    placeholder='10000.00'
+                    hint='EGP · up to 2 decimal places'
+                    value={serviceFeeAmount}
+                    onChange={setServiceFeeAmount}
+                    disabled={!billingEnabled}
+                    errors={fieldErrors.serviceFeeAmount}
+                  />
+                  <div className='space-y-1.5'>
+                    <Label htmlFor='edit-client-service-fee-currency'>
+                      Currency
+                    </Label>
+                    <Input
+                      id='edit-client-service-fee-currency'
+                      value='EGP'
+                      readOnly
+                      disabled={!billingEnabled}
+                      aria-describedby='edit-client-service-fee-currency-hint'
+                    />
+                    <p
+                      id='edit-client-service-fee-currency-hint'
+                      className='text-xs text-muted-foreground'>
+                      EGP only
+                    </p>
+                  </div>
+                  <Field
+                    id='edit-client-billing-contact-name'
+                    label='Billing contact name'
+                    placeholder='e.g. Nour Hassan'
+                    hint='Optional'
+                    value={billingContactName}
+                    onChange={setBillingContactName}
+                    disabled={!billingEnabled}
+                    errors={fieldErrors.billingContactName}
+                  />
+                  <Field
+                    id='edit-client-billing-contact-email'
+                    label='Billing contact email'
+                    type='email'
+                    placeholder='billing@client.com'
+                    value={billingContactEmail}
+                    onChange={setBillingContactEmail}
+                    disabled={!billingEnabled}
+                    errors={fieldErrors.billingContactEmail}
+                  />
+                  <Field
+                    id='edit-client-billing-cycle-start'
+                    label='Billing cycle start date'
+                    type='date'
+                    hint='Africa/Cairo calendar date'
+                    value={billingCycleStartDate}
+                    onChange={setBillingCycleStartDate}
+                    disabled={!billingEnabled}
+                    errors={fieldErrors.billingCycleStartDate}
+                  />
+                </div>
+
+                <div className='rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground'>
+                  <p>
+                    <span className='font-medium text-foreground'>
+                      Payment schedule:
+                    </span>{" "}
+                    50% / 50% — two installments, fixed.
+                  </p>
+                  <p className='mt-1'>
+                    <span className='font-medium text-foreground'>
+                      Second installment:
+                    </span>{" "}
+                    due 15 days after the first installment is actually paid,
+                    with a reminder one day earlier.
+                  </p>
+                </div>
+
+                {fieldErrors.serviceFeeCurrency &&
+                  fieldErrors.serviceFeeCurrency.length > 0 && (
+                    <p className='text-xs text-destructive'>
+                      {fieldErrors.serviceFeeCurrency[0]}
+                    </p>
+                  )}
+              </div>
+            )}
 
             {fieldErrors._form && fieldErrors._form.length > 0 && (
               <p className='text-sm text-destructive'>{fieldErrors._form[0]}</p>

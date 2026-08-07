@@ -37,6 +37,14 @@ export default async function ClientsPage() {
         minCpa: true,
         maxCpa: true,
         notes: true,
+        // Loopa commercial / billing profile — prefill for the edit sheet.
+        // Separate from monthlyBudget, which is the advertising budget.
+        serviceFeeAmount: true,
+        serviceFeeCurrency: true,
+        billingContactName: true,
+        billingContactEmail: true,
+        billingCycleStartDate: true,
+        billingEnabled: true,
       },
       orderBy: { name: "asc" },
     }),
@@ -116,6 +124,19 @@ export default async function ClientsPage() {
       minCpa: c.minCpa === null ? null : num(c.minCpa),
       maxCpa: c.maxCpa === null ? null : num(c.maxCpa),
       notes: c.notes,
+      // Billing profile. serviceFeeAmount deliberately uses Decimal.toString()
+      // and NOT num() — routing the service fee through a JS float would
+      // defeat the exact integer-piaster guarantee (and a Prisma Decimal
+      // cannot cross the server/client boundary unserialised anyway).
+      // billingCycleStartDate stays a Date; ClientCard's toCivilDateString
+      // converts it with UTC getters.
+      billingEnabled: c.billingEnabled,
+      serviceFeeAmount:
+        c.serviceFeeAmount === null ? null : c.serviceFeeAmount.toString(),
+      serviceFeeCurrency: c.serviceFeeCurrency,
+      billingContactName: c.billingContactName,
+      billingContactEmail: c.billingContactEmail,
+      billingCycleStartDate: c.billingCycleStartDate,
     };
   });
 

@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useFormState, useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -16,12 +17,16 @@ interface FieldProps {
   id: string;
   label: string;
   name: string;
-  type?: "text" | "number" | "url";
+  type?: "text" | "number" | "url" | "email" | "date";
   step?: string;
   required?: boolean;
   placeholder?: string;
   hint?: string;
   errors?: string[];
+  disabled?: boolean;
+  readOnly?: boolean;
+  defaultValue?: string;
+  inputMode?: "decimal";
 }
 
 function Field({
@@ -34,6 +39,10 @@ function Field({
   placeholder,
   hint,
   errors,
+  disabled,
+  readOnly,
+  defaultValue,
+  inputMode,
 }: FieldProps) {
   const errorId = errors && errors.length > 0 ? `${id}-error` : undefined;
   const hintId = hint ? `${id}-hint` : undefined;
@@ -50,6 +59,10 @@ function Field({
         step={step}
         placeholder={placeholder}
         required={required}
+        disabled={disabled}
+        readOnly={readOnly}
+        defaultValue={defaultValue}
+        inputMode={inputMode}
         aria-invalid={errorId ? true : undefined}
         aria-describedby={errorId ?? hintId}
       />
@@ -144,6 +157,10 @@ function SubmitButton() {
 export function ClientForm() {
   const [state, formAction] = useFormState(createClient, initialState);
   const errors = state.errors ?? {};
+  // Billing is opt-in. While it is off the billing inputs are disabled, so the
+  // browser omits them from the submission entirely and the server action
+  // writes nulls for the whole profile.
+  const [billingEnabled, setBillingEnabled] = React.useState(false);
 
   return (
     <form action={formAction} className='space-y-8'>
@@ -263,6 +280,103 @@ export function ClientForm() {
             errors={errors.timezone}
           />
         </div>
+      </section>
+
+      {/* Section D — Commercial & Billing (Loopa's fee, NOT the ad budget) */}
+      <section className='space-y-4'>
+        <SectionHeader
+          title='Commercial & Billing'
+          subtitle={"Loopa's service fee — separate from the client's advertising budget."}
+        />
+
+        <div className='flex items-start gap-3 rounded-md border border-border/60 bg-muted/30 p-3'>
+          <input
+            id='client-billing-enabled'
+            name='billingEnabled'
+            type='checkbox'
+            checked={billingEnabled}
+            onChange={(e) => setBillingEnabled(e.target.checked)}
+            className='mt-0.5 h-4 w-4 rounded border-input accent-foreground'
+          />
+          <div className='space-y-1'>
+            <Label htmlFor='client-billing-enabled'>Enable billing</Label>
+            <p className='text-xs text-muted-foreground'>
+              Turn on to invoice this client a fixed monthly service fee in EGP.
+            </p>
+          </div>
+        </div>
+
+        <div className='grid grid-cols-1 gap-5 md:grid-cols-2'>
+          <Field
+            id='client-service-fee'
+            label='Monthly service fee'
+            name='serviceFeeAmount'
+            type='text'
+            inputMode='decimal'
+            placeholder='10000.00'
+            hint='EGP · up to 2 decimal places'
+            disabled={!billingEnabled}
+            errors={errors.serviceFeeAmount}
+          />
+          <Field
+            id='client-service-fee-currency'
+            label='Currency'
+            name='serviceFeeCurrency'
+            type='text'
+            defaultValue='EGP'
+            readOnly
+            hint='EGP only'
+            disabled={!billingEnabled}
+            errors={errors.serviceFeeCurrency}
+          />
+          <Field
+            id='client-billing-contact-name'
+            label='Billing contact name'
+            name='billingContactName'
+            placeholder='e.g. Nour Hassan'
+            hint='Optional'
+            disabled={!billingEnabled}
+            errors={errors.billingContactName}
+          />
+          <Field
+            id='client-billing-contact-email'
+            label='Billing contact email'
+            name='billingContactEmail'
+            type='email'
+            placeholder='billing@client.com'
+            disabled={!billingEnabled}
+            errors={errors.billingContactEmail}
+          />
+          <Field
+            id='client-billing-cycle-start'
+            label='Billing cycle start date'
+            name='billingCycleStartDate'
+            type='date'
+            hint='Africa/Cairo calendar date'
+            disabled={!billingEnabled}
+            errors={errors.billingCycleStartDate}
+          />
+        </div>
+
+        <div className='rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground'>
+          <p>
+            <span className='font-medium text-foreground'>
+              Payment schedule:
+            </span>{" "}
+            50% / 50% — two installments, fixed.
+          </p>
+          <p className='mt-1'>
+            <span className='font-medium text-foreground'>
+              Second installment:
+            </span>{" "}
+            due 15 days after the first installment is actually paid, with a
+            reminder one day earlier.
+          </p>
+        </div>
+
+        {errors.billingEnabled && errors.billingEnabled.length > 0 && (
+          <p className='text-xs text-destructive'>{errors.billingEnabled[0]}</p>
+        )}
       </section>
 
       {errors._form && errors._form.length > 0 && (

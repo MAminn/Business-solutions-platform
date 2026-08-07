@@ -50,7 +50,38 @@ export interface ClientCardProps {
     minCpa: number | null;
     maxCpa: number | null;
     notes: string | null;
+    // Loopa commercial / billing profile, forwarded verbatim to the edit sheet.
+    // Optional: a caller that does not supply `billingEnabled` leaves the sheet's
+    // billing section hidden and submits no billing keys, so a configured
+    // profile is never silently cleared (see EditClientDialogClient).
+    //
+    // `serviceFeeAmount` must arrive as an EXACT decimal string
+    // (Prisma `Decimal.toString()`), never a number — routing the fee through a
+    // JS float would risk losing a piaster.
+    billingEnabled?: boolean;
+    serviceFeeAmount?: string | null;
+    serviceFeeCurrency?: string | null;
+    billingContactName?: string | null;
+    billingContactEmail?: string | null;
+    billingCycleStartDate?: Date | string | null;
   };
+}
+
+/**
+ * Normalise a `@db.Date` value to the "YYYY-MM-DD" civil-date string the edit
+ * sheet expects. Uses UTC getters only, so the browser's local timezone can
+ * never shift the day. A string is assumed to already be a civil date and is
+ * passed through untouched.
+ */
+function toCivilDateString(
+  value: Date | string | null | undefined,
+): string | null | undefined {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return value;
+  const year = String(value.getUTCFullYear()).padStart(4, "0");
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function ClientCard({ client }: ClientCardProps) {
@@ -164,6 +195,14 @@ export function ClientCard({ client }: ClientCardProps) {
           notes: client.notes,
           status: client.status,
           health: client.health,
+          // Billing profile, passed through as-is. Money stays an exact
+          // decimal string; the date is normalised to a civil-date string.
+          billingEnabled: client.billingEnabled,
+          serviceFeeAmount: client.serviceFeeAmount,
+          serviceFeeCurrency: client.serviceFeeCurrency,
+          billingContactName: client.billingContactName,
+          billingContactEmail: client.billingContactEmail,
+          billingCycleStartDate: toCivilDateString(client.billingCycleStartDate),
         }}
       />
     </div>

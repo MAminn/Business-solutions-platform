@@ -10,6 +10,7 @@ import {
   createClientSchema,
   updateClientSchema,
   flattenClientErrors,
+  resolveBillingProfile,
   type ClientFormState,
   type UpdateClientInput,
 } from "@/server/clients.schemas";
@@ -44,6 +45,13 @@ export async function createClient(
     metaAccountName: formData.get("metaAccountName"),
     currency: formData.get("currency"),
     timezone: formData.get("timezone"),
+    // Loopa commercial / billing profile — read explicitly, field by field.
+    billingEnabled: formData.get("billingEnabled"),
+    serviceFeeAmount: formData.get("serviceFeeAmount"),
+    serviceFeeCurrency: formData.get("serviceFeeCurrency"),
+    billingContactName: formData.get("billingContactName"),
+    billingContactEmail: formData.get("billingContactEmail"),
+    billingCycleStartDate: formData.get("billingCycleStartDate"),
   });
 
   if (!parsed.success) {
@@ -52,6 +60,10 @@ export async function createClient(
 
   const data = parsed.data;
   const organizationId = await getOrgIdForUser(user.id);
+
+  // Billing profile only. This commit creates NO BillingCycle, no installment,
+  // no payment, no email-delivery row, and sends no email.
+  const billing = resolveBillingProfile(data);
 
   // Determine whether full Meta connection is provided (all four fields).
   const hasMeta =
@@ -93,6 +105,15 @@ export async function createClient(
         maxCpa: data.maxCpa,
         minRoas: data.minRoas,
         ...(data.currency ? { reportingCurrency: data.currency } : {}),
+        // Loopa service fee — explicitly mapped, all six columns.
+        // `monthlyBudget` above is the client's ADVERTISING budget and is
+        // deliberately untouched by any of this.
+        billingEnabled: billing.billingEnabled,
+        serviceFeeAmount: billing.serviceFeeAmount,
+        serviceFeeCurrency: billing.serviceFeeCurrency,
+        billingContactName: billing.billingContactName,
+        billingContactEmail: billing.billingContactEmail,
+        billingCycleStartDate: billing.billingCycleStartDate,
         assignees: { create: { userId: user.id } },
         ...(hasMeta
           ? {
@@ -187,6 +208,18 @@ export async function updateClient(
 
   const { id, ...changes } = parsed.data;
 
+  // Tri-state billing:
+  //   billingEnabled === undefined -> caller does not manage billing; every
+  //     billing column is left untouched (Prisma reads `undefined` as no-change)
+  //   billingEnabled === true       -> write the full profile
+  //   billingEnabled === false      -> explicitly clear the profile
+  // This commit never touches BillingCycle / BillingInstallment / BillingPayment
+  // rows; turning billing off only clears the Client-level configuration.
+  const billing =
+    changes.billingEnabled === undefined
+      ? null
+      : resolveBillingProfile(changes);
+
   const updated = await db.client.update({
     where: { id },
     data: {
@@ -200,6 +233,15 @@ export async function updateClient(
       status: changes.status,
       health: changes.health,
       notes: changes.notes,
+      // All six billing columns intentionally mapped.
+      billingEnabled: billing ? billing.billingEnabled : undefined,
+      serviceFeeAmount: billing ? billing.serviceFeeAmount : undefined,
+      serviceFeeCurrency: billing ? billing.serviceFeeCurrency : undefined,
+      billingContactName: billing ? billing.billingContactName : undefined,
+      billingContactEmail: billing ? billing.billingContactEmail : undefined,
+      billingCycleStartDate: billing
+        ? billing.billingCycleStartDate
+        : undefined,
     },
     select: { id: true, organizationId: true },
   });
