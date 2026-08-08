@@ -18,19 +18,23 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ClientSubNav } from "@/components/clients/sub-nav";
+import { SendInvoiceSheet } from "@/components/billing/send-invoice-sheet";
 import {
   piastersFromDecimalString,
   piastersToDecimalString,
   splitFixedFeePiasters,
   sumPiasters,
 } from "@/server/billing-math";
+import { billingPeriodEndUtc } from "@/server/billing-invoice-send.logic";
 
 // ============================================================================
-// Client Billing — READ-ONLY view (B-4).
+// Client Billing (B-4 read-only view, extended in B-5B with "Send invoice").
 //
-// This page renders billing state and writes nothing. It creates no
-// BillingCycle, no installment, no payment, and no email-delivery row; it sends
-// no email and generates no document.
+// The page itself still WRITES NOTHING. It creates no BillingCycle, no
+// installment, no payment and no email-delivery row, and it renders no
+// document. The only mutation available from here is the explicit, confirmed
+// "Send invoice" action, which runs entirely inside
+// @/server/billing-invoice-send.
 //
 // MONEY: every amount is carried as integer piasters. Prisma Decimals are
 // turned into exact strings with `.toString()` and parsed by the committed
@@ -154,6 +158,102 @@ function deriveInvoiceState(
   }
 }
 
+/**
+ * A SENDING delivery older than this is treated as a crashed send, matching the
+ * reclaim window in @/server/billing-invoice-send. Display only — the authority
+ * on whether a row may actually be claimed is the server's compare-and-swap.
+ */
+const STALE_SENDING_MS = 30 * 60 * 1000;
+
+interface InstallmentActionProps {
+  clientId: string;
+  sequence: number;
+  financialStatus: InstallmentStatus;
+  delivery: {
+    id: string;
+    status: BillingEmailStatus;
+    updatedAt: Date;
+    recipient: string;
+  } | null;
+  /** Falls back to the client's current billing contact before a row exists. */
+  recipient: string;
+  amountLabel: string;
+  servicePeriodLabel: string;
+  dueDateLabel: string;
+  nowMs: number;
+}
+
+/**
+ * The invoice action for one installment row.
+ *
+ * Installment 2 never has one in this commit: its invoice is issued only after
+ * installment 1 is paid, which is not implemented yet. Offering a button for it
+ * would promise a flow that does not exist.
+ */
+function InstallmentAction({
+  clientId,
+  sequence,
+  financialStatus,
+  delivery,
+  recipient,
+  amountLabel,
+  servicePeriodLabel,
+  dueDateLabel,
+  nowMs,
+}: InstallmentActionProps) {
+  const none = <span className='text-muted-foreground'>—</span>;
+
+  if (sequence !== 1) return none;
+  // Paid or cancelled installments are financially settled; re-invoicing them
+  // is not a B-5B action.
+  if (financialStatus !== "PENDING") return none;
+
+  // No delivery row yet: this is the first send, so the bootstrap action runs.
+  if (delivery === null) {
+    return (
+      <SendInvoiceSheet
+        mode='send'
+        clientId={clientId}
+        triggerLabel='Send invoice'
+        recipient={recipient}
+        amountLabel={amountLabel}
+        servicePeriodLabel={servicePeriodLabel}
+        dueDateLabel={dueDateLabel}
+      />
+    );
+  }
+
+  if (delivery.status === "SENT") return none;
+
+  if (
+    delivery.status === "SENDING" &&
+    nowMs - delivery.updatedAt.getTime() < STALE_SENDING_MS
+  ) {
+    // A live send owns this row. Offering Retry here would only produce an
+    // IN_PROGRESS response.
+    return <span className='text-xs text-muted-foreground'>Sending…</span>;
+  }
+
+  // PENDING (an unclaimed row left behind by a committed transaction whose send
+  // never started), FAILED, or a SENDING row that has gone stale. All three are
+  // re-sends of an invoice that already exists, so no number is allocated.
+  return (
+    <SendInvoiceSheet
+      mode='retry'
+      clientId={clientId}
+      deliveryId={delivery.id}
+      triggerLabel={
+        delivery.status === "PENDING" ? "Send invoice" : "Retry invoice"
+      }
+      triggerVariant={delivery.status === "PENDING" ? "default" : "outline"}
+      recipient={delivery.recipient}
+      amountLabel={amountLabel}
+      servicePeriodLabel={servicePeriodLabel}
+      dueDateLabel={dueDateLabel}
+    />
+  );
+}
+
 function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
     <Card>
@@ -197,6 +297,11 @@ export default async function ClientBillingPage({ params }: PageProps) {
   });
   if (!client) notFound();
 
+  // Presentation only: how long a SENDING delivery has been quiet. No billing
+  // date is ever derived from this — those all come from persisted @db.Date
+  // values, which this page only reads.
+  const nowMs = Date.now();
+
   const cycles = await db.billingCycle.findMany({
     where: { clientId: client.id },
     orderBy: { periodStart: "desc" },
@@ -232,7 +337,16 @@ export default async function ClientBillingPage({ params }: PageProps) {
             },
           },
           deliveries: {
-            select: { id: true, kind: true, status: true },
+            // `updatedAt` drives the stale-SENDING display only. `recipient`
+            // is the address the invoice was actually addressed to, which a
+            // later edit to the client's billing contact must not rewrite.
+            select: {
+              id: true,
+              kind: true,
+              status: true,
+              updatedAt: true,
+              recipient: true,
+            },
           },
         },
       },
@@ -321,6 +435,13 @@ export default async function ClientBillingPage({ params }: PageProps) {
   if (cycles.length === 0) {
     const [firstPiasters, secondPiasters] = splitFixedFeePiasters(feePiasters);
 
+    // Preview only. The authoritative period is recomputed from the same pure
+    // helper inside the send transaction, from the same saved start date.
+    const previewPeriodStart = client.billingCycleStartDate as Date;
+    const previewPeriodLabel = `${formatCivilDate(previewPeriodStart)} → ${formatCivilDate(
+      billingPeriodEndUtc(previewPeriodStart),
+    )}`;
+
     return (
       <div className='space-y-8'>
         {header}
@@ -345,6 +466,17 @@ export default async function ClientBillingPage({ params }: PageProps) {
                 Status:{" "}
                 <Badge variant='info'>Ready to invoice</Badge>
               </p>
+              <div className='mt-3'>
+                <SendInvoiceSheet
+                  mode='send'
+                  clientId={client.id}
+                  triggerLabel='Send invoice'
+                  recipient={client.billingContactEmail as string}
+                  amountLabel={formatPiasters(firstPiasters, currency)}
+                  servicePeriodLabel={previewPeriodLabel}
+                  dueDateLabel='Due on issue'
+                />
+              </div>
             </div>
 
             <div className='rounded-md border border-border/60 p-4'>
@@ -383,6 +515,7 @@ export default async function ClientBillingPage({ params }: PageProps) {
 
       {cycles.map((cycle) => {
         const cycleFeePiasters = piastersFromDecimal(cycle.feeAmount);
+        const cyclePeriodLabel = `${formatCivilDate(cycle.periodStart)} → ${formatCivilDate(cycle.periodEnd)}`;
 
         // Received/outstanding are DERIVED from payment rows every render —
         // never stored, never cached, and summed in integer piasters.
@@ -452,6 +585,7 @@ export default async function ClientBillingPage({ params }: PageProps) {
                         <TableHead>Reminder</TableHead>
                         <TableHead>Paid on</TableHead>
                         <TableHead>Receipt no.</TableHead>
+                        <TableHead className='text-right'>Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -510,6 +644,28 @@ export default async function ClientBillingPage({ params }: PageProps) {
                             <TableCell className='text-muted-foreground'>
                               {installment.payment?.receiptNumber ?? "—"}
                             </TableCell>
+                            <TableCell className='text-right'>
+                              <InstallmentAction
+                                clientId={client.id}
+                                sequence={installment.sequence}
+                                financialStatus={installment.status}
+                                delivery={invoiceDelivery}
+                                recipient={
+                                  client.billingContactEmail as string
+                                }
+                                amountLabel={formatPiasters(
+                                  piastersFromDecimal(installment.amountDue),
+                                  installment.currency,
+                                )}
+                                servicePeriodLabel={cyclePeriodLabel}
+                                dueDateLabel={
+                                  installment.dueDate === null
+                                    ? "Due on issue"
+                                    : formatCivilDate(installment.dueDate)
+                                }
+                                nowMs={nowMs}
+                              />
+                            </TableCell>
                           </TableRow>
                         );
                       })}
@@ -517,14 +673,18 @@ export default async function ClientBillingPage({ params }: PageProps) {
                   </Table>
                 </div>
 
-                {cycle.installments.length > 0 &&
-                  cycle.installments.every((i) => i.dueDate === null) && (
-                    <p className='mt-4 text-xs text-muted-foreground'>
-                      Installment 2&rsquo;s due and reminder dates are set when
-                      the first installment payment is recorded — 15 and 14 days
-                      after the payment date.
-                    </p>
-                  )}
+                {/* Keyed on installment 2 specifically. Once installment 1 has
+                    been invoiced it HAS a due date, so an "every installment"
+                    test would hide this note exactly when it matters most. */}
+                {cycle.installments.some(
+                  (i) => i.sequence === 2 && i.dueDate === null,
+                ) && (
+                  <p className='mt-4 text-xs text-muted-foreground'>
+                    Installment 2 has no due date and no reminder date yet. Both
+                    are set when the first installment payment is recorded — 15
+                    and 14 days after the payment date.
+                  </p>
+                )}
               </CardContent>
             </Card>
 

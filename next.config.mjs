@@ -10,6 +10,16 @@ const nextConfig = {
   },
   experimental: {
     serverActions: { bodySizeLimit: "2mb" },
+    // The invoice rasterizer. These must stay OUT of the webpack bundle:
+    // @napi-rs/canvas is a prebuilt native .node binary, and pdfjs-dist loads
+    // its own worker plus the standard_fonts assets by filesystem path at
+    // runtime. Bundling either breaks the resolution the raster module relies
+    // on. Not related to `output: "standalone"`, which stays disabled.
+    serverComponentsExternalPackages: [
+      "pdf-to-img",
+      "pdfjs-dist",
+      "@napi-rs/canvas",
+    ],
   },
 };
 

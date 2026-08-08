@@ -80,11 +80,35 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/**
+ * A single in-memory file attachment. `content` is a Buffer that the caller
+ * already has in hand — this module never reads from disk or fetches a URL, so
+ * an attachment can only ever be something the application itself produced.
+ */
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+  /**
+   * Content-ID for embedding via <img src="cid:…">. Setting this moves the
+   * part into a multipart/related node so the image renders inside the message
+   * body instead of appearing only as a download.
+   */
+  cid?: string;
+  /** Nodemailer already defaults to "inline" when cid is set; be explicit. */
+  contentDisposition?: "attachment" | "inline";
+}
+
 export async function sendEmail(params: {
   to: string | string[];
   subject: string;
   html: string;
   text?: string;
+  /**
+   * Optional. Omitted entirely when undefined, so every existing caller (e.g.
+   * the funding alerts) produces byte-for-byte the same message as before.
+   */
+  attachments?: EmailAttachment[];
 }): Promise<{ messageId: string }> {
   const { transport, from } = getTransporter();
   const info = await transport.sendMail({
@@ -93,6 +117,7 @@ export async function sendEmail(params: {
     subject: params.subject,
     html: params.html,
     text: params.text ?? htmlToText(params.html),
+    attachments: params.attachments,
   });
   return { messageId: info.messageId };
 }
