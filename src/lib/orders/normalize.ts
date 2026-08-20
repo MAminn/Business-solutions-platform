@@ -170,8 +170,38 @@ const CARD_PATTERNS = [
   "meeza",
   "stripe",
   "checkout com",
-  "paymob",
   "shopify payments",
+];
+
+/**
+ * Recognised payment aggregators, mostly Egyptian.
+ *
+ * These name a GATEWAY, not an instrument. Each routes to some mix of cards,
+ * Meeza, mobile wallets, Fawry, bank installments, and in several cases cash
+ * collection - and the order record says only which gateway was used. They
+ * therefore resolve to `GATEWAY`, never to `CARD`.
+ *
+ * `paymob` was previously classified as `CARD`. It is an aggregator of exactly
+ * the same kind as Fawaterak, so that was an overclaim of the same sort; it is
+ * moved here for consistency. No test or caller depended on the old value.
+ */
+const GATEWAY_PATTERNS = [
+  "fawaterak",
+  "fawaterk",
+  "paymob",
+  "accept com",
+  "kashier",
+  "paytabs",
+  "pay tabs",
+  "geidea",
+  "opay",
+  "myfatoorah",
+  "my fatoorah",
+  "amazon payment services",
+  "payfort",
+  "paycoo",
+  "tap payments",
+  "xpay",
 ];
 
 const WALLET_PATTERNS = [
@@ -244,6 +274,14 @@ export function normalizePaymentMethod(
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 
+  // Order matters. COD is checked FIRST and unconditionally: an aggregator can
+  // route to cash collection, so a label naming COD outright must never be
+  // reduced to the gateway that carried it.
+  //
+  // GATEWAY is checked LAST of the known buckets, because it means "instrument
+  // unspecified". When a label names both a gateway and an instrument
+  // ("Paymob - Visa"), the instrument IS specified, so the more informative
+  // `CARD` wins and `GATEWAY`'s definition simply does not apply.
   const classified = tokens.map((token): OrderPaymentMethod => {
     const folded = foldGatewayName(token);
     if (matchesAny(folded, COD_PATTERNS)) return "COD";
@@ -251,6 +289,7 @@ export function normalizePaymentMethod(
     if (matchesAny(folded, BANK_PATTERNS)) return "BANK_TRANSFER";
     if (matchesAny(folded, GIFT_CARD_PATTERNS)) return "GIFT_CARD";
     if (matchesAny(folded, CARD_PATTERNS)) return "CARD";
+    if (matchesAny(folded, GATEWAY_PATTERNS)) return "GATEWAY";
     return "UNKNOWN";
   });
 

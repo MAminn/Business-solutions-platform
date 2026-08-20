@@ -184,6 +184,77 @@ test("normalizePaymentMethod: a blank value is absent, not unrecognised", () => 
   assert.equal(result.unrecognized, false);
 });
 
+// --- GATEWAY: recognised aggregator, instrument unspecified -----------------
+
+test("normalizePaymentMethod: Fawaterak resolves to GATEWAY, not UNKNOWN", () => {
+  // Observed verbatim in a real export. The gateway is recognised, so this is
+  // no longer a work-queue item.
+  const result = normalizePaymentMethod("Fawaterak Payment Gateway");
+  assert.equal(result.method, "GATEWAY");
+  assert.equal(result.isCod, false);
+  assert.equal(result.unrecognized, false);
+});
+
+test("normalizePaymentMethod: GATEWAY is not CARD — the instrument is unstated", () => {
+  // Egyptian aggregators route to cards, wallets, Fawry, installments and in
+  // some cases cash collection. Calling any of them CARD asserts an instrument
+  // the source never gave.
+  for (const value of [
+    "Fawaterak Payment Gateway",
+    "Paymob",
+    "Kashier",
+    "PayTabs",
+    "Geidea",
+    "MyFatoorah",
+    "Amazon Payment Services",
+  ]) {
+    assert.equal(normalizePaymentMethod(value).method, "GATEWAY", value);
+  }
+});
+
+test("normalizePaymentMethod: a named instrument still outranks the gateway", () => {
+  // "instrument unspecified" does not apply once the label specifies one.
+  assert.equal(normalizePaymentMethod("Paymob - Visa").method, "CARD");
+  assert.equal(normalizePaymentMethod("Kashier Credit Card").method, "CARD");
+});
+
+test("normalizePaymentMethod: COD still wins over a gateway on the same label", () => {
+  // An aggregator can carry cash collection; a label naming COD outright must
+  // never be reduced to the gateway that carried it.
+  const result = normalizePaymentMethod("Fawaterak Payment Gateway, Cash on Delivery (COD)");
+  assert.equal(result.method, "COD");
+  assert.equal(result.isCod, true);
+});
+
+test("normalizePaymentMethod: COD alone is unaffected by the GATEWAY bucket", () => {
+  const result = normalizePaymentMethod("Cash on Delivery (COD)");
+  assert.equal(result.method, "COD");
+  assert.equal(result.isCod, true);
+  assert.equal(result.unrecognized, false);
+});
+
+test("normalizePaymentMethod: a gateway split with a differing method is OTHER", () => {
+  // OTHER stays reserved for genuinely mixed known methods.
+  const result = normalizePaymentMethod("Fawaterak Payment Gateway, Visa");
+  assert.equal(result.method, "OTHER");
+  assert.equal(result.isCod, false);
+});
+
+test("normalizePaymentMethod: two gateway tokens collapse to GATEWAY, not OTHER", () => {
+  const result = normalizePaymentMethod("Paymob, Kashier");
+  assert.equal(result.method, "GATEWAY");
+});
+
+test("normalizePaymentMethod: gateway-like text not in the list is still UNKNOWN", () => {
+  // UNKNOWN keeps meaning "truly unrecognised" — an unlisted gateway must
+  // surface as a work-queue item rather than be absorbed by GATEWAY.
+  for (const value of ["Some New Payment Gateway", "Acme Pay", "Gateway"]) {
+    const result = normalizePaymentMethod(value);
+    assert.equal(result.method, "UNKNOWN", value);
+    assert.equal(result.unrecognized, true, value);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Payment state
 // ---------------------------------------------------------------------------

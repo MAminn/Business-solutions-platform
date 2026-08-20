@@ -62,6 +62,23 @@ export type OrderFulfillmentState =
  * `COD` is the load-bearing member: for an Egyptian COD store, payment state
  * stays `PENDING` through a perfectly healthy order lifecycle, so COD orders
  * must be identifiable without reference to payment state.
+ *
+ * The last three members are deliberately distinct and must not be merged:
+ *
+ *   - `GATEWAY` — a RECOGNISED payment aggregator whose underlying instrument
+ *     is unspecified by the source. Egyptian aggregators (Fawaterak, Paymob,
+ *     Kashier, ...) route to cards, Meeza, mobile wallets, Fawry, installments
+ *     and in some cases cash collection, and the order record names only the
+ *     gateway. Classifying one as `CARD` would assert an instrument the source
+ *     never stated - and could mask a cash-collection payment, which is exactly
+ *     what COD detection exists to catch.
+ *   - `OTHER` — a genuinely MIXED split payment resolving to two or more
+ *     different known methods, where no single answer is truthful.
+ *   - `UNKNOWN` — truly unrecognised, or absent.
+ *
+ * Collapsing any pair of these destroys the distinction between "we know what
+ * this is and it is deliberately imprecise", "this order really had two payment
+ * methods", and "we failed to parse this".
  */
 export type OrderPaymentMethod =
   | "COD"
@@ -69,6 +86,7 @@ export type OrderPaymentMethod =
   | "WALLET"
   | "BANK_TRANSFER"
   | "GIFT_CARD"
+  | "GATEWAY"
   | "OTHER"
   | "UNKNOWN";
 
