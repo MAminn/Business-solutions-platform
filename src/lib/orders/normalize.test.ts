@@ -433,6 +433,32 @@ test("adaptShopifyCsv: a repeated Id on continuation rows also groups to one ord
   assert.equal(result.orders[0].itemCount, 3);
 });
 
+test("adaptShopifyCsv: blank and non-numeric line-item quantities contribute 0", () => {
+  // Real exports sometimes blank `Lineitem quantity` on a continuation row.
+  // Rows 2 and 3 must contribute nothing to itemCount without disturbing the
+  // grouping, the order total, or the row count.
+  const csv = [
+    HEADER,
+    "#5406,,pending,fulfilled,EGP,1500.00,Normal,2026-08-20 18:26:28 +0300,2,Cairo,C,Cairo,EG,,,Cash on Delivery (COD),0.00,7577148162274,tag,web",
+    ",,,,,,,,,,,,,,,,,,,",
+    ",,,,,,,,abc,,,,,,,,,,,",
+    ",,,,,,,,1,,,,,,,,,,,",
+  ].join("\n");
+
+  const result = adaptShopifyCsv(csv);
+  assert.equal(result.orders.length, 1);
+
+  const order = result.orders[0];
+  // 2 + (blank -> 0) + (non-numeric -> 0) + 1
+  assert.equal(order.itemCount, 3);
+  // Order-level fields come from the first row, never summed across the group.
+  assert.equal(order.totalAmount, "1500.00");
+  assert.equal(order.currency, "EGP");
+  // Every physical row is still accounted for, including the ones that
+  // contributed no quantity.
+  assert.equal(order.sourceRowCount, 4);
+});
+
 test("adaptShopifyCsv: an order with no parseable Total is skipped with an error", () => {
   const csv = [
     HEADER,
