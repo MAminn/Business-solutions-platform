@@ -209,10 +209,18 @@ export interface MetaInsight {
  * `platform_position` on its own ("Current combination of data breakdown
  * columns (action_type, platform_position) is invalid") but accepts the pair,
  * and returns a row per (publisher_platform, platform_position) combination.
+ *
+ * `region` is a standalone geo breakdown: Meta accepts it on its own and
+ * returns one row per region / governorate per day, carrying Meta's own
+ * display name for the area (e.g. "Cairo Governorate") in a `region` field.
+ * Region rows commonly report spend/impressions/clicks with zero attributed
+ * purchases — that is Meta's attribution behaviour for the geo split, not a
+ * fetch failure.
  */
 export type MetaBreakdown =
   | "publisher_platform"
-  | "publisher_platform,platform_position";
+  | "publisher_platform,platform_position"
+  | "region";
 
 /**
  * An insights row returned with a `breakdowns` parameter. Carries the
@@ -222,6 +230,7 @@ export type MetaBreakdown =
 export interface MetaBreakdownInsight extends MetaInsight {
   publisher_platform?: string;
   platform_position?: string;
+  region?: string;
 }
 
 // Shared insights field list, used for both per-entity and account-level pulls

@@ -2,12 +2,14 @@
  * Account-level breakdown sync (Phase B — ACCOUNT level, kill-switched).
  *
  * Fetches Meta breakdown insights at ACCOUNT level for a single connection over
- * an N-day window and stores them in `InsightsBreakdownDaily`. Two dimensions
- * are wired up, both driven by the same core:
+ * an N-day window and stores them in `InsightsBreakdownDaily`. Three dimensions
+ * are wired up, all driven by the same core:
  *   - PUBLISHER_PLATFORM — Meta `publisher_platform`. Daily cadence
  *     (`sync-all?mode=full`) + manual route.
  *   - PLACEMENT — Meta `publisher_platform,platform_position`, stored as a
- *     pipe-delimited composite value. Manual route only in this phase.
+ *     pipe-delimited composite value.
+ *   - REGION — Meta `region`, stored as Meta's raw region/governorate name.
+ *     Manual route only in this phase.
  *
  * This is a completely separate write path from the entity-level insights
  * pipeline in `lib/meta/sync.ts`: it never touches `InsightsDaily`,
@@ -64,6 +66,12 @@ export interface BreakdownReconciliation {
 export interface BreakdownSyncResult {
   connectionId: string;
   accountName: string;
+  /**
+   * The stored dimension this run filled (PUBLISHER_PLATFORM / PLACEMENT /
+   * REGION). Always present, including on `disabled` and `failed` outcomes, so
+   * a result is never ambiguous about which dimension it describes.
+   */
+  dimension: BreakdownDimension;
   outcome: BreakdownSyncOutcome;
   fetched: number;
   written: number;
@@ -168,6 +176,26 @@ const PLACEMENT_CONFIG: BreakdownConfig = {
 };
 
 /**
+ * REGION — Meta `region`, a standalone geo breakdown returning one row per
+ * region / governorate per day.
+ *
+ * The stored `value` is Meta's RAW region string, untouched: no normalisation,
+ * no casing changes, no Arabic/English mapping. Meta's own display name (e.g.
+ * "Cairo Governorate") is the key, so any later name mapping stays a read-side
+ * concern and never rewrites history in the table. Rows Meta returns without a
+ * region fall back to "unknown", matching the other dimensions.
+ *
+ * Expect purchases / conversionValue to be 0 on many region rows: Meta does
+ * not attribute conversions to the geo split as reliably as it reports
+ * spend/impressions/clicks. Zeros there are NOT a sync failure.
+ */
+const REGION_CONFIG: BreakdownConfig = {
+  dimension: BreakdownDimension.REGION,
+  metaBreakdown: "region",
+  buildValue: (row) => row.region ?? "unknown",
+};
+
+/**
  * Publisher-platform breakdown sync. Public contract is unchanged: same name,
  * same signature, same return type, same behaviour. Called by the daily
  * `sync-all?mode=full` cadence and by the manual route.
@@ -190,6 +218,17 @@ export async function syncPlacementBreakdown(
   return syncBreakdownDimension(connectionId, PLACEMENT_CONFIG, days);
 }
 
+/**
+ * Region (governorate-level geo) breakdown sync. Manual route only in this
+ * phase — deliberately NOT wired into the daily cadence.
+ */
+export async function syncRegionBreakdown(
+  connectionId: string,
+  days = 30,
+): Promise<BreakdownSyncResult> {
+  return syncBreakdownDimension(connectionId, REGION_CONFIG, days);
+}
+
 async function syncBreakdownDimension(
   connectionId: string,
   config: BreakdownConfig,
@@ -201,6 +240,7 @@ async function syncBreakdownDimension(
   const base: BreakdownSyncResult = {
     connectionId,
     accountName: "",
+    dimension: config.dimension,
     outcome: "disabled",
     fetched: 0,
     written: 0,
@@ -318,6 +358,7 @@ async function syncBreakdownDimension(
   const success: BreakdownSyncResult = {
     connectionId: connection.id,
     accountName: connection.accountName,
+    dimension: config.dimension,
     outcome: "synced",
     fetched: rows.length,
     written,

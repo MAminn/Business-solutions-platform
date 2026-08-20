@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import {
   syncPlacementBreakdown,
   syncPublisherPlatformBreakdown,
+  syncRegionBreakdown,
 } from "@/lib/meta/sync-breakdowns";
 
 /**
@@ -16,9 +17,13 @@ import {
  *
  * Modes:
  *   - ?connectionId=<id> → REQUIRED. This phase never iterates all connections.
- *   - ?dimension=<name>  → optional; `publisher_platform` (default) or
+ *   - ?dimension=<name>  → optional; `publisher_platform` (default),
  *                          `placement` (Meta `publisher_platform,platform_position`,
- *                          stored as a pipe-delimited composite value).
+ *                          stored as a pipe-delimited composite value), or
+ *                          `region` (Meta `region`, stored as Meta's raw
+ *                          region/governorate name). Region rows commonly
+ *                          report spend/impressions/clicks with zero attributed
+ *                          purchases — that is expected, not a failure.
  *   - ?dryRun=true       → report the plan; zero Meta calls, zero writes.
  *
  * Kill switch: disabled unless `BREAKDOWN_SYNC_ENABLED === "true"`. When
@@ -44,6 +49,10 @@ const DIMENSIONS = {
   placement: {
     dimension: BreakdownDimension.PLACEMENT,
     run: syncPlacementBreakdown,
+  },
+  region: {
+    dimension: BreakdownDimension.REGION,
+    run: syncRegionBreakdown,
   },
 } as const;
 
