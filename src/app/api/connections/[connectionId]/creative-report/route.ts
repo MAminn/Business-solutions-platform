@@ -1,10 +1,16 @@
 import { subDays, format } from "date-fns";
 import type { NextRequest } from "next/server";
+import {
+  CreativeAssetKind,
+  CreativeAssetStatus,
+} from "@prisma/client";
 import type { CreativeType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
+import { getStorageDriver } from "@/lib/assets/storage";
 import {
   renderCreativeReportPdf,
+  TOP_CREATIVE_CARDS,
   VERDICTS,
 } from "@/server/creative-report-doc";
 import type {
@@ -26,6 +32,12 @@ import type {
 //
 // Revenue / ROAS / CPA are Meta-reported and not reconciled against real
 // sales — the report states this explicitly.
+//
+// The one exception to "no network calls" is the best-effort creative-image
+// resolution used to illustrate the top cards (stored asset bytes first, then
+// the Meta image / thumbnail URLs). It is failure-isolated at every step: an
+// unresolvable image degrades that one card to the NO IMAGE box and never
+// fails the export.
 // ============================================================================
 
 export const runtime = "nodejs";
@@ -55,6 +67,186 @@ const KILL_MIN_SPEND = 250;
 const FATIGUE_MIN_USABLE_DAYS = 4;
 // Number of most-recent days dropped from the fatigue trend (see isFatigued).
 const FATIGUE_STALE_TRAILING_DAYS = 2;
+
+// ---------------------------------------------------------------------------
+// Creative image resolution (report illustration only)
+// ---------------------------------------------------------------------------
+
+// Hard timeout / size cap mirror the creative-bundle + ingestion downloads.
+const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+// Cap on the bytes embedded per card. Data-URI encoding inflates by ~4/3, so
+// this bounds the PDF at roughly 4MB of image payload across the cards.
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+// Bounded parallelism so the cards do not resolve serially behind N timeouts.
+const IMAGE_RESOLVE_CONCURRENCY = 4;
+
+interface ImageSource {
+  storageKey: string | null;
+  imageUrl: string | null;
+  thumbnailUrl: string | null;
+}
+
+/**
+ * Sniffs the real image format from the leading magic bytes and returns the
+ * MIME type, or null when the bytes are neither JPEG nor PNG.
+ *
+ * @react-pdf/renderer only embeds JPEG and PNG — handing it WEBP/GIF/AVIF (or
+ * an HTML error page served with an image content-type) throws during render
+ * and would take the whole PDF down. The declared Content-Type is not trusted;
+ * only the bytes are.
+ */
+function sniffPdfSafeMime(bytes: Buffer): string | null {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  return null;
+}
+
+/** Encodes verified image bytes as a data URI @react-pdf/renderer can embed. */
+function toDataUri(bytes: Buffer): string | null {
+  const mime = sniffPdfSafeMime(bytes);
+  if (!mime) return null;
+  return `data:${mime};base64,${bytes.toString("base64")}`;
+}
+
+/**
+ * Reads a stored creative asset directly off the storage driver.
+ *
+ * Deliberately NOT through GET /api/creative-assets/[assetId]: that route is
+ * session-authenticated and a server-side self-call would carry no session.
+ * The equivalent access control is already satisfied here — the caller was
+ * authorized for this connection's client before we reached this point, and
+ * the driver re-validates the storageKey against its base directory.
+ *
+ * Returns null on any failure (missing/unreadable object, oversize).
+ */
+async function readStoredAssetBytes(
+  storageKey: string,
+): Promise<Buffer | null> {
+  try {
+    const stream = await getStorageDriver().getStream(storageKey);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of stream) {
+      const buf = Buffer.from(chunk);
+      total += buf.length;
+      if (total > IMAGE_MAX_BYTES) {
+        stream.destroy();
+        return null;
+      }
+      chunks.push(buf);
+    }
+    return Buffer.concat(chunks);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Downloads an image with a hard timeout and size cap. Returns null on any
+ * failure (timeout, non-2xx, oversize, network error).
+ */
+async function downloadImage(url: string): Promise<Buffer | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+
+    const declared = res.headers.get("content-length");
+    if (declared !== null && Number(declared) > IMAGE_MAX_BYTES) return null;
+
+    const data = await res.arrayBuffer();
+    if (data.byteLength > IMAGE_MAX_BYTES) return null;
+
+    return Buffer.from(data);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Resolves one usable card image for a creative, in priority order:
+ *   1. a READY CreativeAsset(kind=IMAGE), read straight from storage,
+ *   2. the full-resolution imageUrl,
+ *   3. the thumbnailUrl.
+ *
+ * VIDEO creatives take the same path — their thumbnail is the expected report
+ * image. videoUrl is never fetched or embedded.
+ *
+ * Returns null only when every available source fails or yields bytes that are
+ * not PDF-embeddable; that null is what makes the card show NO IMAGE.
+ */
+async function resolveCreativeImage(
+  source: ImageSource,
+): Promise<string | null> {
+  if (source.storageKey) {
+    const stored = await readStoredAssetBytes(source.storageKey);
+    if (stored) {
+      const uri = toDataUri(stored);
+      if (uri) return uri;
+    }
+  }
+  for (const url of [source.imageUrl, source.thumbnailUrl]) {
+    if (!url) continue;
+    const bytes = await downloadImage(url);
+    if (!bytes) continue;
+    const uri = toDataUri(bytes);
+    if (uri) return uri;
+  }
+  return null;
+}
+
+/**
+ * Resolves images for every task with bounded parallelism, writing each result
+ * onto the target row. Each task is individually failure-isolated, so the
+ * export proceeds even if all of them fail.
+ */
+async function resolveImagesInto(
+  tasks: Array<{ target: CreativeReportRow; source: ImageSource }>,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= tasks.length) return;
+      const task = tasks[index];
+      try {
+        task.target.imageDataUri = await resolveCreativeImage(task.source);
+      } catch {
+        // A single unresolvable image must never fail the whole PDF export.
+        task.target.imageDataUri = null;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(IMAGE_RESOLVE_CONCURRENCY, tasks.length) },
+      worker,
+    ),
+  );
+}
 
 function plainText(status: number, message: string): Response {
   return new Response(message, {
@@ -224,6 +416,19 @@ export async function GET(
       headline: true,
       bodyText: true,
       callToAction: true,
+      // Meta-hosted image sources, used as the 2nd/3rd resolution fallbacks.
+      imageUrl: true,
+      thumbnailUrl: true,
+      // Preferred source: bytes already mirrored into local storage.
+      assets: {
+        where: {
+          kind: CreativeAssetKind.IMAGE,
+          status: CreativeAssetStatus.READY,
+          storageKey: { not: null },
+        },
+        select: { storageKey: true },
+        take: 1,
+      },
       ads: { select: { id: true, name: true } },
     },
   });
@@ -330,6 +535,8 @@ export async function GET(
     row: Omit<CreativeReportRow, "verdict">;
     spend: number;
     roas: number;
+    /** Image sources; resolved later, only for the cards actually rendered. */
+    imageSource: ImageSource;
   }
 
   const built: Built[] = [];
@@ -356,6 +563,11 @@ export async function GET(
     built.push({
       spend: agg.spend,
       roas,
+      imageSource: {
+        storageKey: cr.assets[0]?.storageKey ?? null,
+        imageUrl: cr.imageUrl,
+        thumbnailUrl: cr.thumbnailUrl,
+      },
       row: {
         name: cleanCreativeName(cr.name),
         type: cr.type as CreativeType,
@@ -434,6 +646,18 @@ export async function GET(
     ...b.row,
     verdict: deriveVerdict(b),
   }));
+
+  // --- Creative images for the rendered cards ------------------------------
+  // Only the first TOP_CREATIVE_CARDS rows get a card, so only those need an
+  // image. rows[] and built[] are index-aligned (rows is a 1:1 map of the
+  // already-sorted built[]). Best-effort: a row keeps imageDataUri null on
+  // failure and renders the NO IMAGE box.
+  await resolveImagesInto(
+    rows.slice(0, TOP_CREATIVE_CARDS).map((row, i) => ({
+      target: row,
+      source: built[i].imageSource,
+    })),
+  );
 
   const verdictCounts = VERDICTS.reduce(
     (acc, v) => {

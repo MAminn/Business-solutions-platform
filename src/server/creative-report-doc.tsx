@@ -15,6 +15,7 @@
 import path from "node:path";
 import {
   Document,
+  Image,
   Page,
   Text,
   View,
@@ -58,6 +59,13 @@ export type Verdict = "Kill" | "Refresh" | "Scale" | "Hold/Watch";
 
 export const VERDICTS: Verdict[] = ["Scale", "Refresh", "Hold/Watch", "Kill"];
 
+/**
+ * Number of creative cards rendered in "Top creatives by spend". Exported so
+ * the report route resolves images for exactly the rows that get a card
+ * instead of for every spender.
+ */
+export const TOP_CREATIVE_CARDS = 8;
+
 export interface CreativeReportRow {
   name: string;
   type: string;
@@ -77,6 +85,14 @@ export interface CreativeReportRow {
   purchases: number;
   fatigued: boolean;
   verdict: Verdict;
+  /**
+   * Pre-resolved creative image as a self-contained data URI
+   * ("data:image/jpeg;base64,..." or the PNG equivalent — the only two
+   * formats @react-pdf/renderer embeds reliably). Built by the report route,
+   * which reads stored asset bytes / fetches the Meta URLs. null (or absent)
+   * when every source failed, in which case the card shows the NO IMAGE box.
+   */
+  imageDataUri?: string | null;
 }
 
 export interface CreativeReportData {
@@ -279,6 +295,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  // Fills the 78x78 box. "cover" preserves the source aspect ratio by
+  // cropping the overflowing axis, so the card dimensions never shift.
+  cardImage: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    borderRadius: 3,
+  },
   imageBoxLabel: {
     fontFamily: "Helvetica-Bold",
     fontSize: 6,
@@ -443,7 +467,7 @@ function Footer({ data }: { data: CreativeReportData }) {
 export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
   const { currency } = data;
   const fatigued = data.creatives.filter((c) => c.fatigued);
-  const topCards = data.creatives.slice(0, 8);
+  const topCards = data.creatives.slice(0, TOP_CREATIVE_CARDS);
 
   return (
     <Document
@@ -515,7 +539,11 @@ export function CreativeReportDocument({ data }: { data: CreativeReportData }) {
           topCards.map((cr, i) => (
             <View key={i} style={styles.card} wrap={false}>
               <View style={styles.imageBox}>
-                <Text style={styles.imageBoxLabel}>No image</Text>
+                {cr.imageDataUri ? (
+                  <Image style={styles.cardImage} src={cr.imageDataUri} />
+                ) : (
+                  <Text style={styles.imageBoxLabel}>No image</Text>
+                )}
               </View>
               <View style={styles.cardBody}>
                 <View style={styles.cardHeadRow}>
