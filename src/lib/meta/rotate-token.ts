@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { ConnectionStatus } from "@prisma/client";
+import { AdPlatform, ConnectionStatus } from "@prisma/client";
 import { decryptToken, encryptToken } from "@/lib/encryption";
 import {
   exchangeForLongLivedToken,
@@ -101,6 +101,7 @@ export async function rotateConnectionToken(
       accessTokenEnc: true,
       tokenExpiresAt: true,
       lastSyncError: true,
+      platform: true,
       platformAccountId: true,
       metaAppProfileId: true,
     },
@@ -126,6 +127,16 @@ export async function rotateConnectionToken(
     accountName: conn.accountName,
     runwayDaysBefore,
   };
+
+  // Token rotation is a Meta `fb_exchange_token` flow — never run it against a
+  // non-Meta connection. No DB write on this path.
+  if (conn.platform !== AdPlatform.META) {
+    return {
+      ...base,
+      outcome: "failed",
+      reason: "Connection is not a Meta connection.",
+    };
+  }
 
   if (conn.status !== ConnectionStatus.ACTIVE) {
     return {

@@ -3,7 +3,7 @@
 import { subDays, format } from "date-fns";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
-import { InsightEntity } from "@prisma/client";
+import { AdPlatform, InsightEntity } from "@prisma/client";
 import type { ConnectionStatus } from "@prisma/client";
 import {
   computeMonthCoverage,
@@ -251,6 +251,7 @@ export async function buildAccountDigest(
       id: true,
       clientId: true,
       accountName: true,
+      platform: true,
       platformAccountId: true,
       currency: true,
       timezone: true,
@@ -269,6 +270,14 @@ export async function buildAccountDigest(
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(conn.clientId)) {
     throw new Error("Forbidden");
+  }
+
+  // Platform guard: every metric, label and caveat below is Meta-specific.
+  // Refuse before any aggregation rather than relabel another platform's data.
+  if (conn.platform !== AdPlatform.META) {
+    throw new Error(
+      `This digest is Meta-only and cannot be generated for a ${conn.platform} connection.`,
+    );
   }
 
   // Hard block: trust data only after a successful 30-day insights backfill

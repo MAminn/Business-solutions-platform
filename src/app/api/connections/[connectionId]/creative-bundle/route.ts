@@ -1,6 +1,7 @@
 import { subDays, format } from "date-fns";
 import JSZip from "jszip";
 import type { NextRequest } from "next/server";
+import { AdPlatform } from "@prisma/client";
 import type { CreativeType } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
@@ -201,6 +202,7 @@ export async function GET(
       id: true,
       clientId: true,
       accountName: true,
+      platform: true,
       platformAccountId: true,
       currency: true,
       insightsBackfilledAt: true,
@@ -215,6 +217,15 @@ export async function GET(
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(conn.clientId)) {
     return plainText(403, "Forbidden");
+  }
+
+  // --- Platform guard: the bundle is Meta-only -----------------------------
+  if (conn.platform !== AdPlatform.META) {
+    return plainText(
+      409,
+      "This creative bundle is Meta-only and cannot be generated for a " +
+        `${conn.platform} connection.`,
+    );
   }
 
   // --- Hard block: require a completed 30-day insights backfill ------------

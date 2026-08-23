@@ -184,34 +184,38 @@ export default async function AdAccountPage({ params }: PageProps) {
                     </Button>
                   </div>
 
-                  <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-3'>
-                    <GenerateDigestButton connectionId={conn.id} />
-                    <GenerateDigestButton
-                      connectionId={conn.id}
-                      mode='monthly'
-                    />
-                    <Button asChild size='sm' variant='outline'>
-                      <a
-                        href={`/api/connections/${conn.id}/creative-bundle`}
-                        download>
-                        Download creative bundle
-                      </a>
-                    </Button>
-                    <Button asChild size='sm' variant='outline'>
-                      <a
-                        href={`/api/connections/${conn.id}/creative-report`}
-                        download>
-                        Export PDF Report
-                      </a>
-                    </Button>
-                    <Button asChild size='sm' variant='outline'>
-                      <a
-                        href={`/api/connections/${conn.id}/creative-bundle?year=${prevMonth.year}&month=${prevMonth.month}`}
-                        download>
-                        Creative bundle (previous month)
-                      </a>
-                    </Button>
-                  </div>
+                  {/* Digest and creative exports are Meta-only; their routes
+                      refuse a non-Meta connection, so do not offer them. */}
+                  {conn.platform === "META" && (
+                    <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-3'>
+                      <GenerateDigestButton connectionId={conn.id} />
+                      <GenerateDigestButton
+                        connectionId={conn.id}
+                        mode='monthly'
+                      />
+                      <Button asChild size='sm' variant='outline'>
+                        <a
+                          href={`/api/connections/${conn.id}/creative-bundle`}
+                          download>
+                          Download creative bundle
+                        </a>
+                      </Button>
+                      <Button asChild size='sm' variant='outline'>
+                        <a
+                          href={`/api/connections/${conn.id}/creative-report`}
+                          download>
+                          Export PDF Report
+                        </a>
+                      </Button>
+                      <Button asChild size='sm' variant='outline'>
+                        <a
+                          href={`/api/connections/${conn.id}/creative-bundle?year=${prevMonth.year}&month=${prevMonth.month}`}
+                          download>
+                          Creative bundle (previous month)
+                        </a>
+                      </Button>
+                    </div>
+                  )}
 
                   {(() => {
                     const cycles = fundingByConnection.get(conn.id) ?? [];

@@ -26,6 +26,7 @@ import {
   InsightEntity,
   ConnectionStatus,
   CreativeType,
+  AdPlatform,
 } from "@prisma/client";
 import { format, subDays } from "date-fns";
 
@@ -98,6 +99,9 @@ export async function getMetaClient(connectionId: string): Promise<{
     include: { metaAppProfile: { select: { apiVersion: true } } },
   });
   if (!conn) return null;
+  // Non-Meta connections have no Meta client; every caller already treats null
+  // as "connection not available".
+  if (conn.platform !== AdPlatform.META) return null;
   if (conn.status !== ConnectionStatus.ACTIVE) return null;
   if (!conn.accessTokenEnc) return null;
 
