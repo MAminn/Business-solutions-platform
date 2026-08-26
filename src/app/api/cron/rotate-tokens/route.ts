@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ConnectionStatus } from "@prisma/client";
+import { AdPlatform, ConnectionStatus } from "@prisma/client";
 import {
   rotateConnectionToken,
   runwayDays,
@@ -76,14 +76,17 @@ export async function GET(req: NextRequest) {
   // ---- Dry run: evaluate only — zero writes, zero Meta calls --------------
   if (dryRun) {
     const connections = await db.adAccountConnection.findMany({
+      // An explicit id stays unfiltered so an operator can inspect any
+      // connection; the default sweep is Meta-only.
       where: connectionIdParam
         ? { id: connectionIdParam }
-        : { status: ConnectionStatus.ACTIVE },
+        : { platform: AdPlatform.META, status: ConnectionStatus.ACTIVE },
       orderBy: { id: "asc" },
       select: {
         id: true,
         accountName: true,
         status: true,
+        platform: true,
         accessTokenEnc: true,
         tokenExpiresAt: true,
       },
@@ -91,10 +94,14 @@ export async function GET(req: NextRequest) {
 
     const results: DryRunResult[] = connections.map((conn) => {
       const runway = runwayDays(conn.tokenExpiresAt);
+      // A dry run must not claim it would rotate a connection that provably
+      // cannot rotate, so platform is a conjunct in both branches.
       const wouldRotate = connectionIdParam
-        ? conn.status === ConnectionStatus.ACTIVE &&
+        ? conn.platform === AdPlatform.META &&
+          conn.status === ConnectionStatus.ACTIVE &&
           conn.accessTokenEnc !== null
-        : conn.accessTokenEnc !== null &&
+        : conn.platform === AdPlatform.META &&
+          conn.accessTokenEnc !== null &&
           runway !== null &&
           runway < ROTATION_RUNWAY_THRESHOLD_DAYS;
       console.log(
@@ -122,7 +129,8 @@ export async function GET(req: NextRequest) {
 
   // ---- Default: rotate every ACTIVE connection due for rotation -----------
   const connections = await db.adAccountConnection.findMany({
-    where: { status: ConnectionStatus.ACTIVE },
+    // Meta-only rotation: never enumerate a non-Meta connection.
+    where: { platform: AdPlatform.META, status: ConnectionStatus.ACTIVE },
     orderBy: { id: "asc" },
     select: { id: true, accountName: true, tokenExpiresAt: true },
   });

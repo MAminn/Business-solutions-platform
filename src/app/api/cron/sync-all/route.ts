@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ConnectionStatus } from "@prisma/client";
+import { AdPlatform, ConnectionStatus } from "@prisma/client";
 import {
   syncStructural,
   syncInsightsIncremental,
@@ -80,6 +80,8 @@ export async function GET(req: NextRequest) {
 
   const connections = await db.adAccountConnection.findMany({
     where: {
+      // Meta-only pipeline: never enumerate a non-Meta connection.
+      platform: AdPlatform.META,
       status: ConnectionStatus.ACTIVE,
       accessTokenEnc: { not: null },
     },
