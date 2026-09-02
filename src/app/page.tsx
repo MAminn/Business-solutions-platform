@@ -12,12 +12,7 @@ const TITLE = "Loopa Growth | Performance Marketing & Media Buying";
 const DESCRIPTION =
   "Loopa Growth is an Egypt-based performance marketing and media buying agency helping e-commerce brands manage, measure and improve paid advertising across EMEA.";
 
-/**
- * No verified public @loopagrowth.com business address exists in this project.
- * Set `email` to the real address to turn the closing CTA into a mailto: link;
- * while it is null the page shows neutral copy instead of inventing one.
- */
-const CONTACT = { email: null as string | null };
+const CONTACT = { email: "Muhamedhassan@loopagrowth.com" as string | null };
 
 export const metadata: Metadata = {
   title: TITLE,

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   LegalList,
   LegalPage,
@@ -117,8 +118,13 @@ export default function PrivacyPage() {
       <LegalSection heading='Questions'>
         <p>
           For questions about this policy or about data we hold on your
-          advertising accounts, please contact the Loopa Growth team through
-          your existing agency contact.
+          advertising accounts, contact the Loopa Growth team at{" "}
+          <Link
+            href='mailto:Muhamedhassan@loopagrowth.com'
+            className='font-medium text-foreground underline decoration-accent decoration-2 underline-offset-4'>
+            Muhamedhassan@loopagrowth.com
+          </Link>
+          .
         </p>
       </LegalSection>
     </LegalPage>

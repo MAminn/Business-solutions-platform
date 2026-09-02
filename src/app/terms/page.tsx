@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/marketing/legal-page";
 
 const TITLE = "Terms of Use | Loopa Growth";
@@ -76,8 +77,13 @@ export default function TermsPage() {
 
       <LegalSection heading='Contact'>
         <p>
-          For questions about these terms, please contact the Loopa Growth team
-          through your existing agency contact.
+          For questions about these terms, contact the Loopa Growth team at{" "}
+          <Link
+            href='mailto:Muhamedhassan@loopagrowth.com'
+            className='font-medium text-foreground underline decoration-accent decoration-2 underline-offset-4'>
+            Muhamedhassan@loopagrowth.com
+          </Link>
+          .
         </p>
       </LegalSection>
     </LegalPage>

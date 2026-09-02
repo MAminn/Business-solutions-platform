@@ -19,6 +19,13 @@ export function SiteFooter() {
               digital-first brands. Based in Egypt, working with clients across
               EMEA.
             </p>
+            <p className='mt-5 text-sm text-muted-foreground'>
+              <a
+                href='mailto:Muhamedhassan@loopagrowth.com'
+                className='font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-accent'>
+                Muhamedhassan@loopagrowth.com
+              </a>
+            </p>
           </div>
 
           <div className='grid grid-cols-2 gap-10 sm:gap-20'>
