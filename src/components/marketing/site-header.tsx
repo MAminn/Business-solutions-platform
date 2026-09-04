@@ -44,7 +44,7 @@ export function SiteHeader() {
 
         <div className='flex items-center gap-4 sm:gap-6'>
           <Link
-            href='/sign-in'
+            href='/dashboard'
             className='hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline-block'>
             Team login
           </Link>
@@ -78,7 +78,7 @@ export function SiteHeader() {
                 ))}
                 <li>
                   <Link
-                    href='/sign-in'
+                    href='/dashboard'
                     className='block py-4 text-base text-muted-foreground'>
                     Team login
                   </Link>

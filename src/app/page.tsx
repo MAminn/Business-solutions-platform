@@ -638,7 +638,7 @@ export default function HomePage() {
                 <p className='mt-14 border-t border-border pt-7 text-sm text-muted-foreground'>
                   Loopa Growth team member?{" "}
                   <Link
-                    href='/sign-in'
+                    href='/dashboard'
                     className='font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-accent'>
                     Sign in to the Media Buyer OS
                   </Link>

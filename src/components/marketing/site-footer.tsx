@@ -73,7 +73,7 @@ export function SiteFooter() {
                 </li>
                 <li>
                   <Link
-                    href='/sign-in'
+                    href='/dashboard'
                     className='text-sm text-muted-foreground transition-colors hover:text-foreground'>
                     Team login
                   </Link>
