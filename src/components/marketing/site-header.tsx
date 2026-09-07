@@ -43,11 +43,11 @@ export function SiteHeader() {
         </nav>
 
         <div className='flex items-center gap-4 sm:gap-6'>
-          <Link
-            href='/dashboard'
+          <a
+            href='/sign-in'
             className='hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline-block'>
             Team login
-          </Link>
+          </a>
           <Link
             href='/#contact'
             className='hidden rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90 sm:inline-block'>
@@ -77,11 +77,11 @@ export function SiteHeader() {
                   </li>
                 ))}
                 <li>
-                  <Link
-                    href='/dashboard'
+                  <a
+                    href='/sign-in'
                     className='block py-4 text-base text-muted-foreground'>
                     Team login
-                  </Link>
+                  </a>
                 </li>
               </ul>
               <Link
