@@ -19,6 +19,8 @@ import { SyncNowButton } from "@/components/integrations/sync-now-button";
 import { MetaAppProfiles } from "@/components/integrations/meta-app-profiles";
 import { ConnectClientLauncher } from "@/components/integrations/connect-client-launcher";
 import { TikTokAppProfiles } from "@/components/integrations/tiktok-app-profiles";
+import { ConnectTikTokLauncher } from "@/components/integrations/connect-tiktok-launcher";
+import { isTikTokConnectEnabled } from "@/lib/tiktok/flags";
 import {
   listMetaAppProfiles,
   getMetaOAuthRedirectUri,
@@ -47,6 +49,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   profile_required:
     "Select a Meta App Profile before connecting. Add one below if you have none.",
   unknown: "Something went wrong. Please try again.",
+  tiktok_disabled: "TikTok connections are not enabled.",
+  tiktok_client: "You do not have access to that client.",
+  tiktok_profile:
+    "Select a TikTok App Profile from your workspace before connecting.",
+  tiktok_missing_code:
+    "TikTok did not return an authorization code. Please try again.",
+  tiktok_state: "TikTok authorization expired or invalid. Please try again.",
+  tiktok_exchange: "TikTok rejected the authorization. Please try again.",
 };
 
 type StatusDisplay = {
@@ -173,6 +183,14 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
         <Card className='border-amber-500/30 bg-warning/10 p-4 text-sm text-amber-300'>
           The authorization returned no ad accounts. Make sure the Meta user has
           access to at least one ad account, then try again.
+        </Card>
+      );
+    }
+    if (searchParams.warning === "tiktok_no_advertisers") {
+      return (
+        <Card className='border-amber-500/30 bg-warning/10 p-4 text-sm text-amber-300'>
+          The TikTok authorization returned no advertisers. Make sure the TikTok
+          account has access to at least one advertiser, then try again.
         </Card>
       );
     }
@@ -319,6 +337,13 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
           redirectUri={tiktokRedirectUri}
         />
       </div>
+
+      {isTikTokConnectEnabled() && (
+        <ConnectTikTokLauncher
+          clients={clients}
+          profiles={tiktokProfiles.map((p) => ({ id: p.id, name: p.name }))}
+        />
+      )}
     </div>
   );
 }
