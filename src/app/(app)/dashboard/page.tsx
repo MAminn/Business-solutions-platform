@@ -24,7 +24,11 @@ import {
   formatMultiplier,
   formatDelta,
 } from "@/lib/format";
-import type { TaskPriority, ClientHealth } from "@prisma/client";
+import {
+  AdPlatform,
+  type TaskPriority,
+  type ClientHealth,
+} from "@prisma/client";
 
 const priorityWeight: Record<TaskPriority, number> = {
   URGENT: 4,
@@ -58,7 +62,10 @@ export default async function DashboardPage() {
   // CAMPAIGN-level insights — see note in HANDOFF).
   const campaigns = await db.campaign.findMany({
     where: {
-      adAccountConnection: { clientId: { in: accessibleClientIds } },
+      adAccountConnection: {
+        clientId: { in: accessibleClientIds },
+        platform: AdPlatform.META,
+      },
     },
     select: {
       id: true,
@@ -131,7 +138,10 @@ export default async function DashboardPage() {
     // used to derive the live Winning Creatives count by grouped asset.
     db.creative.findMany({
       where: {
-        adAccountConnection: { clientId: { in: accessibleClientIds } },
+        adAccountConnection: {
+          clientId: { in: accessibleClientIds },
+          platform: AdPlatform.META,
+        },
       },
       select: {
         id: true,
@@ -162,7 +172,10 @@ export default async function DashboardPage() {
       orderBy: { name: "asc" },
     }),
     db.adAccountConnection.findMany({
-      where: { clientId: { in: accessibleClientIds } },
+      where: {
+        clientId: { in: accessibleClientIds },
+        platform: AdPlatform.META,
+      },
       select: { clientId: true, currency: true, insightsBackfilledAt: true },
     }),
     db.insightsDaily.groupBy({

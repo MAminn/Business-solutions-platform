@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { subDays } from "date-fns";
+import { AdPlatform } from "@prisma/client";
 import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -185,7 +186,7 @@ export default async function ClientCampaignsPage({
 
   const campaigns = await db.campaign.findMany({
     where: {
-      adAccountConnection: { clientId: client.id },
+      adAccountConnection: { clientId: client.id, platform: AdPlatform.META },
       ...(statusFilter !== "ALL" ? { status: statusFilter } : {}),
     },
     select: {

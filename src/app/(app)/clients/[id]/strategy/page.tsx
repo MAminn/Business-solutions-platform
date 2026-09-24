@@ -1,6 +1,10 @@
 import { notFound } from "next/navigation";
 import { format, startOfMonth, endOfMonth } from "date-fns";
-import type { CampaignObjectiveType, StrategyStatus } from "@prisma/client";
+import {
+  AdPlatform,
+  type CampaignObjectiveType,
+  type StrategyStatus,
+} from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,7 +129,9 @@ export default async function StrategyPage({ params }: PageProps) {
 
   // --- Populated state -------------------------------------------------
   const campaigns = await db.campaign.findMany({
-    where: { adAccountConnection: { clientId: client.id } },
+    where: {
+      adAccountConnection: { clientId: client.id, platform: AdPlatform.META },
+    },
     select: { id: true, objective: true },
   });
   const campaignIds = campaigns.map((c) => c.id);

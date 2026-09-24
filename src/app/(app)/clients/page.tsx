@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { subDays, startOfMonth } from "date-fns";
+import { AdPlatform } from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,10 @@ export default async function ClientsPage() {
     }),
     db.campaign.findMany({
       where: {
-        adAccountConnection: { clientId: { in: accessibleClientIds } },
+        adAccountConnection: {
+          clientId: { in: accessibleClientIds },
+          platform: AdPlatform.META,
+        },
       },
       select: {
         id: true,

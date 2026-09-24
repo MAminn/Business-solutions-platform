@@ -1,4 +1,8 @@
-import { BreakdownDimension, InsightEntity } from "@prisma/client";
+import {
+  AdPlatform,
+  BreakdownDimension,
+  InsightEntity,
+} from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   dayUTC,
@@ -212,7 +216,7 @@ export async function getClientAnalysis(
   // ---------------------------------------------------------------------------
   const [connections, clientTargetRow] = await Promise.all([
     db.adAccountConnection.findMany({
-      where: { clientId },
+      where: { clientId, platform: AdPlatform.META },
       select: { id: true, accountName: true, currency: true, timezone: true },
     }),
     db.client.findUnique({

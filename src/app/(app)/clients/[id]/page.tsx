@@ -6,7 +6,7 @@ import {
   getDate,
   formatDistanceToNow,
 } from "date-fns";
-import type { TaskPriority } from "@prisma/client";
+import { AdPlatform, type TaskPriority } from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -105,7 +105,9 @@ export default async function ClientOverviewPage({ params }: PageProps) {
   const monthStart = startOfMonth(now);
 
   const campaigns = await db.campaign.findMany({
-    where: { adAccountConnection: { clientId: client.id } },
+    where: {
+      adAccountConnection: { clientId: client.id, platform: AdPlatform.META },
+    },
     select: { id: true, name: true, effectiveStatus: true },
   });
   const campaignIds = campaigns.map((c) => c.id);
@@ -123,7 +125,7 @@ export default async function ClientOverviewPage({ params }: PageProps) {
     recommendationCount,
   ] = await Promise.all([
     db.adAccountConnection.aggregate({
-      where: { clientId: client.id },
+      where: { clientId: client.id, platform: AdPlatform.META },
       _max: { lastSyncedAt: true },
     }),
     db.insightsDaily.aggregate({

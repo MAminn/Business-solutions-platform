@@ -1,6 +1,10 @@
 import { notFound } from "next/navigation";
 import { subDays } from "date-fns";
-import { CreativeAssetKind, CreativeAssetStatus } from "@prisma/client";
+import {
+  AdPlatform,
+  CreativeAssetKind,
+  CreativeAssetStatus,
+} from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -72,7 +76,7 @@ export default async function ClientCreativesPage({ params }: PageProps) {
   const currency = client.reportingCurrency;
 
   const connections = await db.adAccountConnection.findMany({
-    where: { clientId: client.id },
+    where: { clientId: client.id, platform: AdPlatform.META },
     select: { id: true, platformAccountId: true },
   });
   const connectionIds = connections.map((c) => c.id);
