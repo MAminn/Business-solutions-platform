@@ -60,6 +60,7 @@ model Organization {
   clients  Client[]
   auditLogs AuditLog[]
   metaAppProfiles MetaAppProfile[]
+  tiktokAppProfiles TikTokAppProfile[]
 }
 
 model OrganizationMember {
@@ -265,6 +266,55 @@ model PendingMetaOAuthSession {
   @@index([expiresAt])
 }
 
+// A workspace-owned TikTok for Business app (BYO-app), the TikTok counterpart
+// of MetaAppProfile. The app secret is encrypted at rest with the same
+// AES-256-GCM helper used for access tokens (lib/encryption.ts).
+model TikTokAppProfile {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  appId          String
+  // Encrypted with AES-256-GCM (see lib/encryption.ts). Never returned to the client.
+  appSecretEnc   String
+  apiVersion     String   @default("v1.3")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connections  AdAccountConnection[]
+
+  @@unique([organizationId, appId])
+  @@index([organizationId])
+}
+
+// Short-lived server-side store for an in-progress TikTok OAuth connection.
+// Mirrors PendingMetaOAuthSession: only an unguessable session id is stored in
+// the client cookie; the encrypted token + advertiser list live here.
+// `expiresAt` bounds the OAuth session lifetime and MUST be enforced on read:
+// the loader has to reject an expired row, not assume a purge job removed it.
+// No TikTok purge job exists yet — rows accumulate until one is added with the
+// OAuth flow.
+model PendingTikTokOAuthSession {
+  id                 String    @id
+  userId             String
+  organizationId     String
+  clientId           String
+  tiktokAppProfileId String
+  // TikTok access token, encrypted with AES-256-GCM (lib/encryption.ts).
+  accessTokenEnc     String
+  // Nullable on purpose: TikTok's token exchange returns no expiry, so none is
+  // stored. Do NOT fabricate one.
+  tokenExpiresAt     DateTime?
+  // Snapshot of the advertisers the token can access: { id, name, currency, timezone }[].
+  advertisers        Json
+  // Raw numeric scope array exactly as returned by TikTok.
+  scopes             Json?
+  expiresAt          DateTime
+  createdAt          DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
 model AdAccountConnection {
   id                  String           @id @default(cuid())
   clientId            String
@@ -292,11 +342,14 @@ model AdAccountConnection {
   // legacy rows (authorized before BYO-app, or pre-created shells) stay valid;
   // those fall back to env META_APP_ID/SECRET. Required for all new connections.
   metaAppProfileId    String?
+  // Workspace-owned TikTok app used to authorize this connection (TIKTOK only).
+  tiktokAppProfileId  String?
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
 
   client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   metaAppProfile MetaAppProfile? @relation(fields: [metaAppProfileId], references: [id], onDelete: Restrict)
+  tiktokAppProfile TikTokAppProfile? @relation(fields: [tiktokAppProfileId], references: [id], onDelete: Restrict)
   campaigns      Campaign[]
   creatives      Creative[]
   syncJobs       SyncJob[]
@@ -306,6 +359,7 @@ model AdAccountConnection {
   @@index([clientId])
   @@index([status])
   @@index([metaAppProfileId])
+  @@index([tiktokAppProfileId])
 }
 
 // ============================================================================
