@@ -18,10 +18,15 @@ import { DisconnectButton } from "@/components/integrations/disconnect-button";
 import { SyncNowButton } from "@/components/integrations/sync-now-button";
 import { MetaAppProfiles } from "@/components/integrations/meta-app-profiles";
 import { ConnectClientLauncher } from "@/components/integrations/connect-client-launcher";
+import { TikTokAppProfiles } from "@/components/integrations/tiktok-app-profiles";
 import {
   listMetaAppProfiles,
   getMetaOAuthRedirectUri,
 } from "@/server/meta-app-profiles";
+import {
+  listTikTokAppProfiles,
+  getTikTokOAuthRedirectUriAction,
+} from "@/server/tiktok-app-profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +77,14 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
   const user = await requireUser();
   const accessible = await getAccessibleClientIds(user);
 
-  const [connections, profiles, redirectUri, clients] = await Promise.all([
+  const [
+    connections,
+    profiles,
+    redirectUri,
+    clients,
+    tiktokProfiles,
+    tiktokRedirectUri,
+  ] = await Promise.all([
     db.adAccountConnection.findMany({
       where: {
         clientId: { in: accessible },
@@ -103,6 +115,8 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    listTikTokAppProfiles(),
+    getTikTokOAuthRedirectUriAction(),
   ]);
 
   const connectProfiles = profiles.map((p) => ({
@@ -298,6 +312,13 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
           </Table>
         </Card>
       )}
+
+      <div id='tiktok-app-profiles'>
+        <TikTokAppProfiles
+          profiles={tiktokProfiles}
+          redirectUri={tiktokRedirectUri}
+        />
+      </div>
     </div>
   );
 }
