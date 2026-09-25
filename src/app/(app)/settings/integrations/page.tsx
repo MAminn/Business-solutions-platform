@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from "date-fns";
-import type { ConnectionStatus } from "@prisma/client";
+import { AdPlatform, type ConnectionStatus } from "@prisma/client";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
@@ -20,6 +20,7 @@ import { MetaAppProfiles } from "@/components/integrations/meta-app-profiles";
 import { ConnectClientLauncher } from "@/components/integrations/connect-client-launcher";
 import { TikTokAppProfiles } from "@/components/integrations/tiktok-app-profiles";
 import { ConnectTikTokLauncher } from "@/components/integrations/connect-tiktok-launcher";
+import { TikTokConnectionsList } from "@/components/integrations/tiktok-connections-list";
 import { isTikTokConnectEnabled } from "@/lib/tiktok/flags";
 import {
   listMetaAppProfiles,
@@ -94,6 +95,7 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
     clients,
     tiktokProfiles,
     tiktokRedirectUri,
+    tiktokConnections,
   ] = await Promise.all([
     db.adAccountConnection.findMany({
       where: {
@@ -127,6 +129,28 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
     }),
     listTikTokAppProfiles(),
     getTikTokOAuthRedirectUriAction(),
+    // Not gated by TIKTOK_CONNECT_ENABLED: the flag gates creation only, so
+    // existing connections stay visible and disconnectable.
+    db.adAccountConnection.findMany({
+      where: {
+        clientId: { in: accessible },
+        platform: AdPlatform.TIKTOK,
+      },
+      select: {
+        id: true,
+        platformAccountId: true,
+        accountName: true,
+        currency: true,
+        timezone: true,
+        status: true,
+        // Read server-side only to derive hasToken; never passed down.
+        accessTokenEnc: true,
+        createdAt: true,
+        tiktokAppProfile: { select: { name: true } },
+        client: { select: { name: true } },
+      },
+      orderBy: [{ client: { name: "asc" } }, { createdAt: "asc" }],
+    }),
   ]);
 
   const connectProfiles = profiles.map((p) => ({
@@ -150,6 +174,19 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
     hasToken: Boolean(c.accessTokenEnc),
     profileName: c.metaAppProfile?.name ?? null,
     usesEnvFallback: c.metaAppProfileId === null,
+  }));
+
+  const tiktokRows = tiktokConnections.map((c) => ({
+    id: c.id,
+    clientName: c.client.name,
+    platformAccountId: c.platformAccountId,
+    accountName: c.accountName,
+    profileName: c.tiktokAppProfile?.name ?? null,
+    currency: c.currency,
+    timezone: c.timezone,
+    status: c.status,
+    hasToken: c.accessTokenEnc !== null,
+    createdAt: c.createdAt,
   }));
 
   const banner = (() => {
@@ -344,6 +381,8 @@ export default async function IntegrationsPage({ searchParams }: PageProps) {
           profiles={tiktokProfiles.map((p) => ({ id: p.id, name: p.name }))}
         />
       )}
+
+      <TikTokConnectionsList rows={tiktokRows} />
     </div>
   );
 }
