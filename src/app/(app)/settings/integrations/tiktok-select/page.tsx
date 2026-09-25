@@ -16,16 +16,29 @@ import {
 import { isTikTokConnectEnabled } from "@/lib/tiktok/flags";
 import { TIKTOK_PENDING_COOKIE } from "@/lib/tiktok/oauth-cookies";
 import { loadPendingTikTokSession } from "@/server/tiktok-oauth-session";
+import { confirmTikTokAdvertisers } from "@/server/tiktok-connect";
 
 export const dynamic = "force-dynamic";
 
+interface PageProps {
+  searchParams: { error?: string };
+}
+
+const ERROR_MESSAGES: Record<string, string> = {
+  tiktok_selection:
+    "Select at least one advertiser from this TikTok authorization.",
+  tiktok_conflict:
+    "One or more selected advertisers are already connected to a different client. Nothing was connected.",
+};
+
 /**
- * DISPLAY ONLY. Lists the advertisers a TikTok authorization can access.
- * Connecting them is not enabled yet, so there is deliberately no form,
- * checkbox, button or server action here. The pending session's token (or its
- * ciphertext) is never rendered or passed to any component.
+ * Lists the advertisers a TikTok authorization can access and lets the user
+ * connect a selection. The form submits advertiser ids only; the client,
+ * profile and session are resolved server-side from the pending session. The
+ * pending session's token (or its ciphertext) is never rendered or passed to
+ * any component.
  */
-export default async function TikTokSelectPage() {
+export default async function TikTokSelectPage({ searchParams }: PageProps) {
   if (!isTikTokConnectEnabled()) {
     redirect("/settings/integrations?error=tiktok_disabled");
   }
@@ -58,6 +71,10 @@ export default async function TikTokSelectPage() {
     redirect("/settings/integrations?error=tiktok_client");
   }
 
+  const errorMessage = searchParams.error
+    ? ERROR_MESSAGES[searchParams.error]
+    : undefined;
+
   return (
     <div className='mx-auto max-w-3xl space-y-8'>
       <div className='space-y-1'>
@@ -70,37 +87,57 @@ export default async function TikTokSelectPage() {
         </p>
       </div>
 
-      <Card className='border-amber-500/30 bg-warning/10 p-4 text-sm text-amber-300'>
-        Connecting these advertisers is not yet enabled.
-      </Card>
+      {errorMessage && (
+        <Card className='border-red-500/30 bg-destructive/10 p-4 text-sm text-red-300'>
+          {errorMessage}
+        </Card>
+      )}
 
-      <Card className='overflow-hidden'>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Advertiser</TableHead>
-              <TableHead>Advertiser ID</TableHead>
-              <TableHead>Currency</TableHead>
-              <TableHead>Timezone</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {session.advertisers.map((a) => (
-              <TableRow key={a.id}>
-                <TableCell className='font-medium'>{a.name}</TableCell>
-                <TableCell>
-                  <span className='font-mono text-xs'>{a.id}</span>
-                </TableCell>
-                <TableCell>{a.currency}</TableCell>
-                {/* Verbatim: "Etc/GMT-2" means UTC+2. Never reinterpret. */}
-                <TableCell className='text-muted-foreground'>
-                  {a.timezone}
-                </TableCell>
+      <form action={confirmTikTokAdvertisers} className='space-y-4'>
+        <Card className='overflow-hidden'>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className='w-10'>
+                  <span className='sr-only'>Select</span>
+                </TableHead>
+                <TableHead>Advertiser</TableHead>
+                <TableHead>Advertiser ID</TableHead>
+                <TableHead>Currency</TableHead>
+                <TableHead>Timezone</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
+            </TableHeader>
+            <TableBody>
+              {session.advertisers.map((a) => (
+                <TableRow key={a.id}>
+                  <TableCell>
+                    <input
+                      type='checkbox'
+                      name='advertiserId'
+                      value={a.id}
+                      className='h-4 w-4 rounded border-input'
+                      aria-label={`Select ${a.name}`}
+                    />
+                  </TableCell>
+                  <TableCell className='font-medium'>{a.name}</TableCell>
+                  <TableCell>
+                    <span className='font-mono text-xs'>{a.id}</span>
+                  </TableCell>
+                  <TableCell>{a.currency}</TableCell>
+                  {/* Verbatim: "Etc/GMT-2" means UTC+2. Never reinterpret. */}
+                  <TableCell className='text-muted-foreground'>
+                    {a.timezone}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+
+        <Button type='submit' size='sm'>
+          Connect selected
+        </Button>
+      </form>
 
       <BackLink />
     </div>
