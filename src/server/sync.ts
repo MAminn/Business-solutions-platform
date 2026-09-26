@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { AdPlatform } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, getAccessibleClientIds } from "@/lib/auth";
 import { writeAudit } from "@/server/audit";
@@ -39,6 +40,7 @@ export async function syncConnectionNow(input: {
     select: {
       id: true,
       clientId: true,
+      platform: true,
       platformAccountId: true,
       accountName: true,
       accessTokenEnc: true,
@@ -50,6 +52,15 @@ export async function syncConnectionNow(input: {
   const accessible = await getAccessibleClientIds(user);
   if (!accessible.includes(conn.clientId)) {
     return { ok: false, error: "Forbidden" };
+  }
+
+  // Refuse at entry: a non-Meta connection must never reach runJob, which
+  // would record a FAILED SyncJob and write lastSyncError.
+  if (conn.platform !== AdPlatform.META) {
+    return {
+      ok: false,
+      error: `Sync is Meta-only and cannot run for a ${conn.platform} connection.`,
+    };
   }
 
   if (!conn.accessTokenEnc) {
